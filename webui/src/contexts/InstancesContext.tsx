@@ -1,4 +1,4 @@
-import { type ReactNode, createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { type ReactNode, createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { CreateInstanceOptions, Instance } from '@/types/instance'
 import { instancesApi } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
@@ -38,9 +38,41 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
   // Convert map to array for consumers
   const instances = Array.from(instancesMap.values())
 
+  // Polling intervals (ms) — adaptive based on whether any instance is in a transition
+  const TRANSITION_STATUSES = new Set(["running", "restarting", "shutting_down"])
+  const POLL_ACTIVE_MS = 2000  // 2s while any instance is starting/restarting/shutting down
+  const POLL_IDLE_MS = 15000   // 15s when all instances are stable (stopped/failed)
+
   const clearError = useCallback(() => {
     setError(null)
   }, [])
+
+  // Background poller: keeps the instance list fresh so start/stop/restart
+  // state changes are reflected without a manual browser refresh.
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const pollIntervalRef = useRef<number>(POLL_IDLE_MS)
+
+  // fetchInstances is defined below and stashed in a ref so the poller and
+  // the fetch can reference each other without a temporal-dead-zone cycle.
+  const fetchInstancesRef = useRef<() => Promise<void>>(async () => {})
+
+  const clearPollTimer = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }, [])
+
+  const scheduleNextPoll = useCallback((instancesList: Instance[]) => {
+    const anyTransitioning = instancesList.some((i) => TRANSITION_STATUSES.has(i.status))
+    const nextInterval = anyTransitioning ? POLL_ACTIVE_MS : POLL_IDLE_MS
+    pollIntervalRef.current = nextInterval
+    clearPollTimer()
+    pollTimerRef.current = setTimeout(() => {
+      pollTimerRef.current = null
+      void fetchInstancesRef.current()
+    }, nextInterval)
+  }, [clearPollTimer])
 
   const fetchInstances = useCallback(async () => {
     if (!isAuthenticated) {
@@ -49,22 +81,39 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
     }
 
     try {
-      setLoading(true)
       setError(null)
       const data = await instancesApi.list()
-      
+
       // Convert array to map
       const newMap = new Map<string, Instance>()
       data.forEach(instance => {
         newMap.set(instance.name, instance)
       })
       setInstancesMap(newMap)
+
+      // Initial-load gate is satisfied once data is present.
+      setLoading(false)
+
+      // Schedule the next background poll with an interval appropriate to
+      // whether any instance is mid-transition.
+      scheduleNextPoll(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch instances')
-    } finally {
       setLoading(false)
+      // Keep trying even on error, but back off to the idle interval
+      pollIntervalRef.current = POLL_IDLE_MS
+      clearPollTimer()
+      pollTimerRef.current = setTimeout(() => {
+        pollTimerRef.current = null
+        void fetchInstancesRef.current()
+      }, POLL_IDLE_MS)
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, scheduleNextPoll, clearPollTimer])
+
+  // Keep the ref current so the poller always calls the latest fetchInstances.
+  useEffect(() => {
+    fetchInstancesRef.current = fetchInstances
+  }, [fetchInstances])
 
   const updateInstanceInMap = useCallback((name: string, updates: Partial<Instance>) => {
     setInstancesMap(prev => {
@@ -170,16 +219,27 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
     }
   }, [])
 
-  // Only fetch instances when auth is ready and user is authenticated
+  // Only fetch instances when auth is ready and user is authenticated.
+  // Also kicks off the background polling loop and cleans it up on unmount /
+  // when auth drops.
   useEffect(() => {
-    if (!authLoading) {
-      if (isAuthenticated) {
-        void fetchInstances()
-      } else {
-        // Clear instances when not authenticated
-        setInstancesMap(new Map())
-        setLoading(false)
-        setError(null)
+    if (authLoading) return
+    if (isAuthenticated) {
+      void fetchInstances()
+    } else {
+      // Stop polling and clear instances when not authenticated
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+      setInstancesMap(new Map())
+      setLoading(false)
+      setError(null)
+    }
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current)
+        pollTimerRef.current = null
       }
     }
   }, [authLoading, isAuthenticated, fetchInstances])

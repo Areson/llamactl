@@ -472,4 +472,97 @@ describe("InstancesContext", () => {
       });
     });
   });
+
+  describe("Auto-refresh (background polling)", () => {
+    it("re-fetches instances on the active-interval when one is running", async () => {
+      vi.useFakeTimers();
+      try {
+        // instance1 is "running" -> active polling (2s)
+        vi.mocked(instancesApi.list).mockResolvedValue(mockInstances);
+        renderWithProvider(<TestComponent />);
+
+        // initial fetch
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const callsAfterInitial = vi.mocked(instancesApi.list).mock.calls.length;
+        expect(callsAfterInitial).toBe(1);
+
+        // advance past the active poll interval (2s) -> should re-fetch
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+        expect(vi.mocked(instancesApi.list).mock.calls.length).toBe(callsAfterInitial + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reflects a backend state change (e.g. instance stopped) without a manual refresh", async () => {
+      vi.useFakeTimers();
+      try {
+        // First response: instance2 running (mid-restart)
+        const firstResponse: Instance[] = [
+          { id: 1, name: "instance1", status: "stopped", options: {} },
+          { id: 2, name: "instance2", status: "running", options: {} },
+        ];
+        // Second response: instance2 has now stopped (the change we want to see)
+        const secondResponse: Instance[] = [
+          { id: 1, name: "instance1", status: "stopped", options: {} },
+          { id: 2, name: "instance2", status: "stopped", options: {} },
+        ];
+        vi.mocked(instancesApi.list)
+          .mockResolvedValueOnce(firstResponse)
+          .mockResolvedValueOnce(secondResponse);
+
+        renderWithProvider(<TestComponent />);
+
+        // initial fetch -> instance2 running
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(screen.getByTestId("instance-instance2")).toHaveTextContent("instance2:running");
+
+        // advance past the active poll interval -> re-fetch picks up the new state
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+        expect(screen.getByTestId("instance-instance2")).toHaveTextContent("instance2:stopped");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("uses the idle interval (15s) when no instance is in transition", async () => {
+      vi.useFakeTimers();
+      try {
+        const allStopped: Instance[] = [
+          { id: 1, name: "instance1", status: "stopped", options: {} },
+          { id: 2, name: "instance2", status: "stopped", options: {} },
+        ];
+        vi.mocked(instancesApi.list).mockResolvedValue(allStopped);
+        renderWithProvider(<TestComponent />);
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        const callsAfterInitial = vi.mocked(instancesApi.list).mock.calls.length;
+        expect(callsAfterInitial).toBe(1);
+
+        // advance 2s (active interval) -> NO re-fetch because all stable
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+        expect(vi.mocked(instancesApi.list).mock.calls.length).toBe(callsAfterInitial);
+
+        // advance to 15s (idle interval) -> re-fetch
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(13000);
+        });
+        expect(vi.mocked(instancesApi.list).mock.calls.length).toBe(callsAfterInitial + 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
