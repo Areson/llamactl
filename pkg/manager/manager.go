@@ -26,6 +26,7 @@ type InstanceManager interface {
 	EvictLRUInstance(group string) error
 	RestartInstance(name string) (*instance.Instance, error)
 	GetInstanceLogs(name string, numLines int) (string, error)
+	GetInstanceLogPath(name string) (string, error)
 	Shutdown()
 	// Subscribe registers for instance status-change events (SSE).
 	Subscribe() EventSubscriber

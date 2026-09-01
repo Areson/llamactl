@@ -8,6 +8,7 @@ import LogsDialog from "@/components/LogDialog";
 import ModelsDialog from "@/components/ModelsDialog";
 import HealthBadge from "@/components/HealthBadge";
 import BackendBadge from "@/components/BackendBadge";
+import ThroughputBadge from "@/components/ThroughputBadge";
 import { useState, useEffect } from "react";
 import { useInstanceHealth } from "@/hooks/useInstanceHealth";
 import { instancesApi, llamaCppApi, type Model } from "@/lib/api";
@@ -129,6 +130,9 @@ function InstanceCard({
             <div className="flex items-center gap-2 flex-wrap">
               <BackendBadge backend={instance.options?.backend_type} docker={instance.options?.docker_enabled} />
               {running && <HealthBadge health={health} />}
+              {running && instance.options?.backend_type === "llama_cpp" && (
+                <ThroughputBadge instanceName={instance.name} instanceStatus={instance.status} />
+              )}
               {instance.options?.group && (
                 <Badge variant="outline" className="text-xs">
                   <Layers className="h-3 w-3 mr-1" />

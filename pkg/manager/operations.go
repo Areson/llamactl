@@ -545,6 +545,20 @@ func (im *instanceManager) GetInstanceLogs(name string, numLines int) (string, e
 	return inst.GetLogs(numLines)
 }
 
+// GetInstanceLogPath returns the absolute path to the instance's local log
+// file. For remote instances it returns an empty string (they have no local
+// log to parse).
+func (im *instanceManager) GetInstanceLogPath(name string) (string, error) {
+	inst, exists := im.registry.get(name)
+	if !exists {
+		return "", fmt.Errorf("instance with name %s not found", name)
+	}
+	if node := im.getNodeForInstance(inst); node != nil {
+		return "", nil // remote: no local log file
+	}
+	return inst.LogFilePath(), nil
+}
+
 // getPortFromOptions extracts the port from backend-specific options
 func (im *instanceManager) getPortFromOptions(options *instance.Options) int {
 	return options.BackendOptions.GetPort()
