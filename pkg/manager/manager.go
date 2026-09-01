@@ -27,6 +27,8 @@ type InstanceManager interface {
 	RestartInstance(name string) (*instance.Instance, error)
 	GetInstanceLogs(name string, numLines int) (string, error)
 	Shutdown()
+	// Subscribe registers for instance status-change events (SSE).
+	Subscribe() EventSubscriber
 }
 
 type instanceManager struct {
@@ -43,6 +45,9 @@ type instanceManager struct {
 	// Synchronization
 	instanceLocks sync.Map // map[string]*sync.Mutex - per-instance locks for concurrent operations
 	shutdownOnce  sync.Once
+
+	// Event bus for status-change broadcasts (SSE)
+	events *eventBus
 }
 
 // New creates a new instance of InstanceManager with dependency injection.
@@ -69,6 +74,7 @@ func New(globalConfig *config.AppConfig, db database.InstanceStore) InstanceMana
 		db:           db,
 		remote:       remote,
 		globalConfig: globalConfig,
+		events:       newEventBus(),
 	}
 
 	// Initialize lifecycle manager (needs reference to manager for Stop/Evict operations)
@@ -293,12 +299,22 @@ func (im *instanceManager) autoStartInstances() {
 	}
 }
 
-func (im *instanceManager) onStatusChange(name string, _, newStatus instance.Status) {
+func (im *instanceManager) onStatusChange(name string, oldStatus, newStatus instance.Status) {
 	if newStatus == instance.Running {
 		im.registry.markRunning(name)
 	} else {
 		im.registry.markStopped(name)
 	}
+	// Broadcast to SSE subscribers so the UI updates without polling.
+	if im.events != nil && oldStatus != newStatus {
+		im.events.Broadcast(InstanceEvent{Name: name, OldStatus: oldStatus, NewStatus: newStatus})
+	}
+}
+
+// Subscribe registers for instance status-change events (used by the SSE
+// endpoint). Returns the event channel and an unsubscribe func.
+func (im *instanceManager) Subscribe() EventSubscriber {
+	return im.events.Subscribe()
 }
 
 // getNodeForInstance returns the node configuration for a remote instance

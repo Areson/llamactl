@@ -42,6 +42,14 @@ func (s Status) MarshalJSON() ([]byte, error) {
 	return json.Marshal(name)
 }
 
+// String returns the human-readable name of the status (e.g. "running").
+func (s Status) String() string {
+	if name, ok := statusToName[s]; ok {
+		return name
+	}
+	return "stopped"
+}
+
 // UnmarshalJSON implements json.Unmarshaler for Status enum
 func (s *Status) UnmarshalJSON(data []byte) error {
 	var str string

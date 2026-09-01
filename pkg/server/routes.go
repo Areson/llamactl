@@ -101,6 +101,7 @@ func SetupRouter(handler *Handler) *chi.Mux {
 		// Instance management endpoints
 		r.Route("/instances", func(r chi.Router) {
 			r.Get("/", handler.ListInstances()) // List all instances
+			r.Get("/events", handler.InstanceEvents()) // SSE: instance status changes
 
 			r.Route("/{name}", func(r chi.Router) {
 				// Instance management
