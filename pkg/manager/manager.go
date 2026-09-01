@@ -7,6 +7,7 @@ import (
 	"llamactl/pkg/database"
 	"llamactl/pkg/instance"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -233,8 +234,39 @@ func (im *instanceManager) autoStartInstances() {
 		im.registry.markStopped(inst.Name)
 	}
 
-	// Start instances that have auto-restart enabled
+	// Start instances that have auto-restart enabled. Enforce group and
+	// global limits: start the most recently used first and leave the rest
+	// stopped (they start on demand). Previously this started every
+	// persisted-running instance, which could boot two large models at
+	// once and spill VRAM into system RAM.
+	sort.Slice(instancesToStart, func(i, j int) bool {
+		return instancesToStart[i].LastRequestTime() > instancesToStart[j].LastRequestTime()
+	})
+
+	limits := im.globalConfig.Instances
+	groupRunning := map[string]int{}
+	started := 0
 	for _, inst := range instancesToStart {
+		group := ""
+		if inst.GetOptions() != nil {
+			group = inst.GetOptions().Group
+		}
+
+		if group != "" {
+			if limit, ok := limits.GroupLimits[group]; ok && limit > 0 && groupRunning[group] >= limit {
+				log.Printf("Instance %s: group %s already at boot limit (%d); leaving stopped (will start on demand)", inst.Name, group, limit)
+				inst.SetStatus(instance.Stopped)
+				im.registry.markStopped(inst.Name)
+				continue
+			}
+		}
+		if limits.MaxRunningInstances > 0 && started >= limits.MaxRunningInstances {
+			log.Printf("Instance %s: at global boot limit (%d); leaving stopped (will start on demand)", inst.Name, limits.MaxRunningInstances)
+			inst.SetStatus(instance.Stopped)
+			im.registry.markStopped(inst.Name)
+			continue
+		}
+
 		log.Printf("Auto-starting instance %s", inst.Name)
 		// Reset running state before starting (since Start() expects stopped instance)
 		inst.SetStatus(instance.Stopped)
@@ -251,8 +283,13 @@ func (im *instanceManager) autoStartInstances() {
 			// Local instance - call Start() directly
 			if err := inst.Start(); err != nil {
 				log.Printf("Failed to auto-start instance %s: %v", inst.Name, err)
+				continue
 			}
 		}
+		if group != "" {
+			groupRunning[group]++
+		}
+		started++
 	}
 }
 

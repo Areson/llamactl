@@ -12,6 +12,7 @@ import (
 	"llamactl/pkg/validation"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -69,6 +70,13 @@ type Handler struct {
 	httpClient      *http.Client
 	authStore       database.AuthStore
 	authMiddleware  *APIAuthMiddleware
+
+	// startMu serializes the evict→start→wait critical section in
+	// ensureInstanceRunning. Group quotas are check-then-act; without this,
+	// two concurrent requests can each see room (or evict the other's LRU)
+	// and start two models in the same group. Holding it through
+	// WaitForHealthy also sequences VRAM-heavy model loads on a shared GPU.
+	startMu sync.Mutex
 }
 
 // NewHandler creates a new Handler instance with the provided instance manager and configuration
@@ -110,6 +118,10 @@ func (h *Handler) ensureInstanceRunning(inst *instance.Instance, canStart bool, 
 	if !canStart {
 		return ErrInstanceNotRunning
 	}
+
+	// See Handler.startMu for why this whole section is serialized.
+	h.startMu.Lock()
+	defer h.startMu.Unlock()
 
 	options := inst.GetOptions()
 	if options == nil || options.OnDemandStart == nil || !*options.OnDemandStart {
