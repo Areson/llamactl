@@ -43,6 +43,15 @@ vi.mock('@/lib/healthService', () => ({
   })),
 }))
 
+// Mock the SSE events client so tests don't create real EventSources.
+vi.mock('@/lib/instanceEventsClient', () => ({
+  instanceEventsClient: {
+    connected: false,
+    subscribe: vi.fn(() => () => {}),
+    destroy: vi.fn(),
+  },
+}))
+
 function renderInstanceList(editInstance = vi.fn()) {
   return render(
     <AuthProvider>

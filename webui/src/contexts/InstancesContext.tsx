@@ -3,6 +3,7 @@ import type { CreateInstanceOptions, Instance } from '@/types/instance'
 import { instancesApi } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { healthService } from '@/lib/healthService'
+import { instanceEventsClient } from '@/lib/instanceEventsClient'
 
 interface InstancesContextState {
   instances: Instance[]
@@ -38,10 +39,15 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
   // Convert map to array for consumers
   const instances = Array.from(instancesMap.values())
 
-  // Polling intervals (ms) — adaptive based on whether any instance is in a transition
+  // Polling intervals (ms). SSE is the primary signal; polling is the safety
+  // net. When SSE is connected we poll slowly (catches anything SSE missed,
+  // e.g. a connection that dropped without firing an event). When SSE is NOT
+  // connected (older backend, network issue) we fall back to aggressive
+  // adaptive polling.
   const TRANSITION_STATUSES = new Set(["running", "restarting", "shutting_down"])
-  const POLL_ACTIVE_MS = 2000  // 2s while any instance is starting/restarting/shutting down
-  const POLL_IDLE_MS = 15000   // 15s when all instances are stable (stopped/failed)
+  const POLL_ACTIVE_MS = 2000   // 2s fallback: any instance in transition
+  const POLL_IDLE_MS = 15000    // 15s fallback: all stable
+  const POLL_SSE_SAFETY_MS = 30000  // 30s when SSE is connected (safety net)
 
   const clearError = useCallback(() => {
     setError(null)
@@ -51,6 +57,7 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
   // state changes are reflected without a manual browser refresh.
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null)
   const pollIntervalRef = useRef<number>(POLL_IDLE_MS)
+  const sseActiveRef = useRef<boolean>(false)
 
   // fetchInstances is defined below and stashed in a ref so the poller and
   // the fetch can reference each other without a temporal-dead-zone cycle.
@@ -64,8 +71,15 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
   }, [])
 
   const scheduleNextPoll = useCallback((instancesList: Instance[]) => {
-    const anyTransitioning = instancesList.some((i) => TRANSITION_STATUSES.has(i.status))
-    const nextInterval = anyTransitioning ? POLL_ACTIVE_MS : POLL_IDLE_MS
+    // When SSE is connected, use the slow safety-net interval (SSE is primary).
+    // Otherwise fall back to adaptive polling based on transition state.
+    let nextInterval: number
+    if (sseActiveRef.current) {
+      nextInterval = POLL_SSE_SAFETY_MS
+    } else {
+      const anyTransitioning = instancesList.some((i) => TRANSITION_STATUSES.has(i.status))
+      nextInterval = anyTransitioning ? POLL_ACTIVE_MS : POLL_IDLE_MS
+    }
     pollIntervalRef.current = nextInterval
     clearPollTimer()
     pollTimerRef.current = setTimeout(() => {
@@ -243,6 +257,39 @@ export const InstancesProvider = ({ children }: InstancesProviderProps) => {
       }
     }
   }, [authLoading, isAuthenticated, fetchInstances])
+
+  // Subscribe to the backend SSE stream of instance status changes. On each
+  // event we immediately refetch so the UI updates in real time without
+  // waiting for a poll. The SSE connection state drives sseActiveRef so the
+  // poller knows whether it's the primary signal or a fallback.
+  useEffect(() => {
+    if (authLoading || !isAuthenticated) return
+
+    // Polling is the fallback; SSE is primary. We track the connection state
+    // via the client's `connected` getter, polled on a light interval.
+    const sseConnCheck = setInterval(() => {
+      const wasActive = sseActiveRef.current
+      sseActiveRef.current = instanceEventsClient.connected
+      // When SSE transitions from active->inactive (or vice versa), reschedule
+      // the next poll with the appropriate interval.
+      if (wasActive !== sseActiveRef.current) {
+        void fetchInstancesRef.current()
+      }
+    }, 5000)
+
+    const unsubscribe = instanceEventsClient.subscribe(() => {
+      // A status changed server-side — refetch immediately.
+      void fetchInstancesRef.current()
+    })
+
+    // Mark SSE active immediately on first check.
+    sseActiveRef.current = instanceEventsClient.connected
+
+    return () => {
+      clearInterval(sseConnCheck)
+      unsubscribe()
+    }
+  }, [authLoading, isAuthenticated])
 
   const value: InstancesContextType = {
     instances,

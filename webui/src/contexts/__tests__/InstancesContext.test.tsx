@@ -21,6 +21,15 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+// Mock the SSE events client so tests don't create real EventSources.
+vi.mock("@/lib/instanceEventsClient", () => ({
+  instanceEventsClient: {
+    connected: false,
+    subscribe: vi.fn(() => () => {}),
+    destroy: vi.fn(),
+  },
+}));
+
 // Mock health service
 vi.mock("@/lib/healthService", () => ({
   healthService: {
