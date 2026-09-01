@@ -1,4 +1,5 @@
 import type { CreateInstanceOptions, Instance } from "@/types/instance";
+import type { ThroughputStats } from "@/types/throughput";
 import type { AppConfig } from "@/types/config";
 import type { ApiKey, CreateKeyRequest, CreateKeyResponse, KeyPermissionResponse } from "@/types/apiKey";
 import type { DownloadJob, CachedModel, ModelFormat } from "@/types/model";
@@ -179,7 +180,20 @@ export const instancesApi = {
 
   // GET /instances/{name}/proxy/health
   getHealth: (name: string) => apiCall<Record<string, unknown>>(`/instances/${encodeURIComponent(name)}/proxy/health`),
+
+  // GET /instances/{name}/stats?limit=N — throughput history parsed from the log.
+  getStats: (name: string, limit = 50) =>
+    apiCall<ThroughputStats>(`/instances/${encodeURIComponent(name)}/stats?limit=${limit}`),
+
+  // GET /instances/{name}/proxy/slots — live llama.cpp slots (we only read is_processing).
+  getSlots: (name: string) => apiCall<SlotInfo[]>(`/instances/${encodeURIComponent(name)}/proxy/slots`),
 };
+
+// Minimal llama.cpp slot shape we consume from /slots.
+export interface SlotInfo {
+  id: number
+  is_processing: boolean
+}
 
 // API Keys API functions
 export const apiKeysApi = {

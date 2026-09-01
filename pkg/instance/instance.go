@@ -269,6 +269,16 @@ func (i *Instance) GetLogs(num_lines int) (string, error) {
 	return i.logger.getLogs(num_lines)
 }
 
+// LogFilePath returns the absolute path to the instance's log file, or "" if
+// the instance has no local logger (e.g. remote instances). Callers can read
+// the file directly to parse structured data such as per-request throughput.
+func (i *Instance) LogFilePath() string {
+	if i.logger == nil {
+		return ""
+	}
+	return i.logger.path()
+}
+
 // LastRequestTime returns the last request time as a Unix timestamp
 func (i *Instance) LastRequestTime() int64 {
 	if i.proxy == nil {

@@ -113,6 +113,7 @@ func SetupRouter(handler *Handler) *chi.Mux {
 				r.Post("/stop", handler.StopInstance())       // Stop running instance
 				r.Post("/restart", handler.RestartInstance()) // Restart instance
 				r.Get("/logs", handler.GetInstanceLogs())     // Get instance logs
+		r.Get("/stats", handler.GetInstanceStats())     // Get throughput stats (parsed from log)
 
 				// Llama.cpp server proxy endpoints (proxied to the actual llama.cpp server)
 				r.Route("/proxy", func(r chi.Router) {

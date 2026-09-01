@@ -108,6 +108,15 @@ func (l *logger) close() {
 	l.logFile = nil
 }
 
+// path returns the absolute path to the instance's log file, or "" if logging
+// is not configured. Intended for read-only consumers (e.g. the throughput
+// stats parser) that need to read the file directly.
+func (l *logger) path() string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.logFilePath
+}
+
 // getLogs retrieves the last n lines of logs from the instance
 func (l *logger) getLogs(num_lines int) (string, error) {
 	l.mu.RLock()
