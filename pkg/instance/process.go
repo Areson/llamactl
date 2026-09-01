@@ -182,10 +182,9 @@ func (p *process) stop() error {
 	p.instance.SetStatus(Stopped)
 
 	// Graceful stop: close stdin (EOF is a shutdown request where the
-	// backend honors it), then deliver the platform interrupt — Ctrl-C on
-	// the child's own console on Windows (llama.cpp installs a
-	// SetConsoleCtrlHandler that stops the server cleanly; SIGINT is a
-	// no-op for children there), SIGINT on Unix.
+	// backend honors it), then the platform interrupt (SIGINT on Unix).
+	// On Windows SIGINT/Ctrl-C do not reach the child, so the force-kill
+	// below is the reliable stop; the shorter grace there trims the wait.
 	if p.stdin != nil {
 		if cerr := p.stdin.Close(); cerr != nil {
 			log.Printf("Failed to close stdin for instance %s: %v", p.instance.Name, cerr)
@@ -200,10 +199,10 @@ func (p *process) stop() error {
 		return nil
 	}
 
-	// Wait for the process to exit after the shutdown signal. A graceful
-	// stop (Ctrl-C/SIGINT) usually finishes in a second or two; the long
-	// grace is the safety net. On Windows the force-kill fallback is
-	// slightly more aggressive, so use a shorter grace there.
+	// Wait for the process to exit after the shutdown signal. On Unix a
+	// SIGINT graceful stop usually finishes in a second or two and the long
+	// grace is the safety net. On Windows the stop is the force-kill, so use
+	// a shorter grace there to avoid a slow shutdown.
 	killGrace := 30 * time.Second
 	if runtime.GOOS == "windows" {
 		killGrace = 5 * time.Second
