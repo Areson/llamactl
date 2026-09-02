@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"llamactl/pkg/instance"
 	"log"
+	"sort"
 )
 
 type MaxRunningInstancesError error
@@ -45,6 +46,17 @@ func (im *instanceManager) ListInstances() ([]*instance.Instance, error) {
 			im.updateLocalInstanceFromRemote(inst, remoteInst)
 		}
 	}
+
+	// Sort for consistent UI ordering: running instances first, then by name.
+	// The registry is a Go map (random iteration order), so without this the
+	// card order shuffles on every poll/refresh.
+	sort.Slice(instances, func(i, j int) bool {
+		ri, rj := instances[i].IsRunning(), instances[j].IsRunning()
+		if ri != rj {
+			return ri // running (true) before not running (false)
+		}
+		return instances[i].Name < instances[j].Name
+	})
 
 	return instances, nil
 }
