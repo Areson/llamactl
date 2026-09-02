@@ -651,6 +651,61 @@ func (m *mockTimeProvider) Now() time.Time {
 	return time.Unix(m.currentTime, 0)
 }
 
+func TestIdleCountsPath(t *testing.T) {
+	realUse := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/embeddings",
+		"/v1/rerank",
+		"/v1/reranking",
+		"/v1/images/generations",
+		"/v1/images/edits",
+		"/completion",
+		"/embeddings",
+		"/infill",
+		"/tokenize",
+		"/detokenize",
+		"/apply-template",
+		"/reranking",
+	}
+	for _, p := range realUse {
+		if !instance.IdleCountsPath(p) {
+			t.Errorf("expected %q to count as real use", p)
+		}
+	}
+
+	notUse := []string{
+		"/health",
+		"/props",
+		"/slots",
+		"/metrics",
+		"/models",
+		"/models/load",
+		"/models/unload",
+		"/",
+		"",
+	}
+	for _, p := range notUse {
+		if instance.IdleCountsPath(p) {
+			t.Errorf("expected %q to NOT count as real use", p)
+		}
+	}
+
+	// Normalization: query string and trailing slash should not change the match
+	// /props?x=1 strips to /props (not real use) -> false
+	if instance.IdleCountsPath("/props?x=1") {
+		t.Error("/props?x=1 should NOT count as real use")
+	}
+	// /v1/chat/completions/ (trailing slash) -> true
+	if !instance.IdleCountsPath("/v1/chat/completions/") {
+		t.Error("trailing slash should still match")
+	}
+	// /completion?stream=1 strips to /completion (real use) -> true
+	if !instance.IdleCountsPath("/completion?stream=1") {
+		t.Error("/completion?stream=1 should count as real use")
+	}
+}
+
 func TestSyncPresetIni(t *testing.T) {
 	globalConfig := &config.AppConfig{
 		Backends: config.BackendConfig{
