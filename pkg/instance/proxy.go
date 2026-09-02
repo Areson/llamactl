@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,8 +129,13 @@ func (p *proxy) build() (*httputil.ReverseProxy, error) {
 			req.Header.Set("Authorization", "Bearer "+p.apiKey)
 		}
 
-		// Update last request time
-		p.updateLastRequestTime()
+		// Update last request time only for paths that count as real use.
+		// Inspection/UI/lifecycle calls (health, props, slots, metrics, model
+		// list/load/unload) do not reset the idle clock, so status polling and
+		// UI refresh do not keep an instance pinned alive.
+		if IdleCountsPath(req.URL.Path) {
+			p.updateLastRequestTime()
+		}
 	}
 
 	if !p.instance.IsRemote() {
@@ -179,6 +185,48 @@ func (p *proxy) clear() {
 	p.proxy = nil
 	p.proxyErr = nil
 	p.proxyOnce = sync.Once{}
+}
+
+// IdleRelevantPaths lists request paths that count as "real use" for idle
+// timeout purposes. Only these refresh lastRequestTime; inspection/UI/lifecycle
+// calls (health, props, slots, metrics, model list/load/unload) do not, so a
+// status-poll loop or UI refresh does not keep an instance pinned alive.
+//
+// Matched against the backend-relative path (after each handler strips its
+// own prefix), so entries are the clean sub-paths the backend actually serves.
+var IdleRelevantPaths = map[string]bool{
+	// OpenAI-compatible inference (via /v1/* OpenAIProxy)
+	"/v1/chat/completions":   true,
+	"/v1/completions":        true,
+	"/v1/embeddings":         true,
+	"/v1/rerank":             true,
+	"/v1/reranking":          true,
+	"/v1/images/generations": true,
+	"/v1/images/edits":       true,
+
+	// llama.cpp native inference endpoints (via /llama-cpp/{name}/* and
+	// /api/v1/instances/{name}/proxy/*)
+	"/completion":     true,
+	"/embeddings":     true,
+	"/infill":         true,
+	"/tokenize":       true,
+	"/detokenize":     true,
+	"/apply-template": true,
+	"/reranking":      true,
+}
+
+// IdleCountsPath reports whether a request to the given (backend-relative)
+// path counts as real use that should reset the idle clock.
+func IdleCountsPath(path string) bool {
+	// Strip any query string so /props?x=1 matches cleanly
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	// Normalize trailing slash (except root) for stable matching
+	if len(path) > 1 && strings.HasSuffix(path, "/") {
+		path = strings.TrimSuffix(path, "/")
+	}
+	return IdleRelevantPaths[path]
 }
 
 // updateLastRequestTime updates the last request access time for the instance
