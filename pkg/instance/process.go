@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type process struct {
 	stdin         io.Closer
 	stdout        io.ReadCloser
 	stderr        io.ReadCloser
+	childLog      *os.File // Windows: child stdout/stderr, survives parent death
 	restarts      int
 	restartCancel context.CancelFunc
 	monitorDone   chan struct{}
@@ -103,25 +105,48 @@ func (p *process) start() error {
 
 	setProcAttrs(p.cmd)
 
-	var err error
-	p.stdin, err = p.cmd.StdinPipe()
-	if err != nil {
-		p.instance.logger.close()
-		return fmt.Errorf("failed to get stdin pipe: %w", err)
-	}
-	p.stdout, err = p.cmd.StdoutPipe()
-	if err != nil {
-		p.instance.logger.close()
-		return fmt.Errorf("failed to get stdout pipe: %w", err)
-	}
-	p.stderr, err = p.cmd.StderrPipe()
-	if err != nil {
-		p.stdout.Close()
-		p.instance.logger.close()
-		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	if runtime.GOOS == "windows" {
+		// No pipes to the parent: when llamactl is hot-swapped, stdin EOF
+		// would stop the model and a broken stdout pipe would lose logs.
+		// Redirect to the log file and NUL so the child survives A's exit.
+		nul, err := os.OpenFile("NUL", os.O_RDWR, 0)
+		if err != nil {
+			p.instance.logger.close()
+			return fmt.Errorf("failed to open NUL: %w", err)
+		}
+		p.cmd.Stdin = nul
+		logPath := p.instance.logger.path()
+		lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			nul.Close()
+			p.instance.logger.close()
+			return fmt.Errorf("failed to open child log: %w", err)
+		}
+		p.childLog = lf
+		p.cmd.Stdout = lf
+		p.cmd.Stderr = lf
+	} else {
+		var err error
+		p.stdin, err = p.cmd.StdinPipe()
+		if err != nil {
+			p.instance.logger.close()
+			return fmt.Errorf("failed to get stdin pipe: %w", err)
+		}
+		p.stdout, err = p.cmd.StdoutPipe()
+		if err != nil {
+			p.instance.logger.close()
+			return fmt.Errorf("failed to get stdout pipe: %w", err)
+		}
+		p.stderr, err = p.cmd.StderrPipe()
+		if err != nil {
+			p.stdout.Close()
+			p.instance.logger.close()
+			return fmt.Errorf("failed to get stderr pipe: %w", err)
+		}
 	}
 
 	if err := p.cmd.Start(); err != nil {
+		p.closeChildLog()
 		return fmt.Errorf("failed to start instance %s: %w", p.instance.Name, err)
 	}
 
@@ -130,10 +155,16 @@ func (p *process) start() error {
 	// Create channel for monitor completion signaling
 	p.monitorDone = make(chan struct{})
 
-	go p.instance.logger.readOutput(p.stdout)
-	go p.instance.logger.readOutput(p.stderr)
+	if p.stdout != nil {
+		go p.instance.logger.readOutput(p.stdout)
+	}
+	if p.stderr != nil {
+		go p.instance.logger.readOutput(p.stderr)
+	}
 
 	go p.monitorProcess()
+
+	p.writeRuntimeState()
 
 	return nil
 }
@@ -161,6 +192,14 @@ func (p *process) stop() error {
 
 	// Set status to ShuttingDown first to reject new requests
 	p.instance.SetStatus(ShuttingDown)
+
+	// For adopted instances, the process was started by a prior llamactl
+	// generation. We don't have the pipe handles, so we signal the PID
+	// directly and wait for the port to release.
+	if p.instance.IsAdopted() {
+		p.mu.Unlock()
+		return p.stopAdopted()
+	}
 
 	// Get the monitor done channel before releasing the lock
 	monitorDone := p.monitorDone
@@ -232,6 +271,8 @@ func (p *process) stop() error {
 	}
 
 	p.instance.logger.close()
+	p.closeChildLog()
+	p.removeRuntimeState()
 
 	return nil
 }
@@ -355,6 +396,8 @@ func (p *process) monitorProcess() {
 
 	p.instance.SetStatus(Stopped)
 	p.instance.logger.close()
+	p.closeChildLog()
+	p.removeRuntimeState()
 
 	// Cancel any existing restart context since we're handling a new exit
 	if p.restartCancel != nil {
@@ -492,4 +535,102 @@ func portInUse(host string, port int) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// stopAdopted stops an instance that was adopted from a prior llamactl
+// generation. The process was started by a different llamactl, so we don't
+// have the pipe handles. Instead we:
+//  1. Read the PID from runtime.json
+//  2. Send a platform-appropriate stop signal (stdin EOF is unavailable;
+//     use TerminateProcess on Windows, SIGTERM on Unix)
+//  3. Wait for the port to release (up to 30s)
+func (p *process) stopAdopted() error {
+	host, port := p.instance.options.GetHost(), p.instance.options.GetPort()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+
+	// Find the runtime state to get the PID.
+	instanceDir := filepath.Join(p.instance.globalInstanceSettings.InstancesDir, p.instance.Name)
+	state, err := ReadRuntimeState(instanceDir)
+	if err != nil {
+		p.instance.SetStatus(Failed)
+		return fmt.Errorf("failed to read runtime state for adopted instance %s: %w", p.instance.Name, err)
+	}
+	if state == nil {
+		// No state file. The process may have already exited.
+		p.instance.SetStatus(Stopped)
+		log.Printf("Instance %s: no runtime state found (adopted); assuming already stopped", p.instance.Name)
+		return nil
+	}
+
+	log.Printf("Instance %s (adopted): stopping PID %d, port %d", p.instance.Name, state.PID, state.Port)
+
+	// Signal the process.
+	if err := stopProcessByPID(state.PID); err != nil {
+		log.Printf("Instance %s: failed to signal PID %d: %v", p.instance.Name, state.PID, err)
+	}
+
+	// Wait for the port to release (up to 30s).
+	deadline := time.Now().Add(30 * time.Second)
+	for portInUse(host, port) {
+		if time.Now().After(deadline) {
+			log.Printf("Instance %s: port %d still in use after 30s; assuming stopped", p.instance.Name, port)
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Clean up the runtime state file.
+	if err := RemoveRuntimeState(instanceDir); err != nil {
+		log.Printf("Instance %s: warning: failed to remove runtime state: %v", p.instance.Name, err)
+	}
+
+	p.instance.SetStatus(Stopped)
+	log.Printf("Instance %s (adopted): stopped", p.instance.Name)
+	return nil
+}
+
+func (p *process) closeChildLog() {
+	if p.childLog != nil {
+		_ = p.childLog.Close()
+		p.childLog = nil
+	}
+}
+
+func (p *process) instanceDir() string {
+	return filepath.Join(p.instance.globalInstanceSettings.InstancesDir, p.instance.Name)
+}
+
+func (p *process) writeRuntimeState() {
+	dir := p.instanceDir()
+	gen := 1
+	if prev, err := ReadRuntimeState(dir); err == nil && prev != nil {
+		gen = prev.Generation + 1
+	}
+	pid := 0
+	if p.cmd != nil && p.cmd.Process != nil {
+		pid = p.cmd.Process.Pid
+	}
+	port := 0
+	if p.instance.options != nil {
+		port = p.instance.options.GetPort()
+	}
+	state := &RuntimeState{
+		SchemaVersion: RuntimeStateSchemaVersion,
+		PID:           pid,
+		Port:          port,
+		StartedAt:     time.Now(),
+		Generation:    gen,
+		LogFile:       p.instance.logger.path(),
+	}
+	if err := WriteRuntimeState(dir, state); err != nil {
+		log.Printf("Instance %s: warning: failed to write runtime state: %v", p.instance.Name, err)
+	}
+}
+
+func (p *process) removeRuntimeState() {
+	if err := RemoveRuntimeState(p.instanceDir()); err != nil {
+		log.Printf("Instance %s: warning: failed to remove runtime state: %v", p.instance.Name, err)
+	}
 }

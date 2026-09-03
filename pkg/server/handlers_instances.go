@@ -171,6 +171,9 @@ func (h *Handler) StartInstance() http.HandlerFunc {
 
 		inst, err := h.InstanceManager.StartInstance(validatedName)
 		if err != nil {
+			if writeHotSwapBusy(w, err) {
+				return
+			}
 			// Check if error is due to maximum running instances limit
 			if _, ok := err.(manager.MaxRunningInstancesError); ok {
 				writeError(w, http.StatusConflict, "max_instances_reached", err.Error())
@@ -207,6 +210,9 @@ func (h *Handler) StopInstance() http.HandlerFunc {
 
 		inst, err := h.InstanceManager.StopInstance(validatedName)
 		if err != nil {
+			if writeHotSwapBusy(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "stop_failed", "Failed to stop instance: "+err.Error())
 			return
 		}
@@ -237,6 +243,9 @@ func (h *Handler) RestartInstance() http.HandlerFunc {
 
 		inst, err := h.InstanceManager.RestartInstance(validatedName)
 		if err != nil {
+			if writeHotSwapBusy(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "restart_failed", "Failed to restart instance: "+err.Error())
 			return
 		}

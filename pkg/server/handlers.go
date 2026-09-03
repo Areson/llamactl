@@ -168,6 +168,9 @@ func (h *Handler) rejectIfAtCapacity() error {
 // Shared by every auto-start call site.
 func writeStartError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, manager.ErrHotSwapInProgress):
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusServiceUnavailable, "hot_swap_in_progress", err.Error())
 	case errors.Is(err, ErrInstanceNotRunning):
 		writeError(w, http.StatusServiceUnavailable, "instance_not_running", err.Error())
 	case errors.Is(err, ErrMaxInstancesReached):
@@ -175,6 +178,15 @@ func writeStartError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, "instance_start_failed", err.Error())
 	}
+}
+
+func writeHotSwapBusy(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, manager.ErrHotSwapInProgress) {
+		return false
+	}
+	w.Header().Set("Retry-After", "2")
+	writeError(w, http.StatusServiceUnavailable, "hot_swap_in_progress", err.Error())
+	return true
 }
 
 func (h *Handler) evictFromGroupQuota(group string) error {

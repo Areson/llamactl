@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { HelpCircle, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { CloudUpload, HelpCircle, LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 
@@ -7,9 +7,10 @@ interface HeaderProps {
   onCreateInstance: () => void;
   onShowSystemInfo: () => void;
   onShowSettings: () => void;
+  onShowHotSwap?: () => void;
 }
 
-function Header({ onCreateInstance, onShowSystemInfo, onShowSettings }: HeaderProps) {
+function Header({ onCreateInstance, onShowSystemInfo, onShowSettings, onShowHotSwap }: HeaderProps) {
   const { logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
@@ -31,6 +32,18 @@ function Header({ onCreateInstance, onShowSystemInfo, onShowSettings }: HeaderPr
             <Button onClick={onCreateInstance} data-testid="create-instance-button">
               Create Instance
             </Button>
+
+            {onShowHotSwap && (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onShowHotSwap}
+                data-testid="hot-swap-button"
+                title="Hot Swap"
+              >
+                <CloudUpload className="h-4 w-4" />
+              </Button>
+            )}
 
             <Button
               variant="outline"

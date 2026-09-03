@@ -1,6 +1,7 @@
 import type { CreateInstanceOptions, Instance } from "@/types/instance";
 import type { ThroughputStats } from "@/types/throughput";
 import type { AppConfig } from "@/types/config";
+import type { HandoffStatus, HotSwapResult } from "@/types/hotswap";
 import type { ApiKey, CreateKeyRequest, CreateKeyResponse, KeyPermissionResponse } from "@/types/apiKey";
 import type { DownloadJob, CachedModel, ModelFormat } from "@/types/model";
 import { handleApiError } from "./errorUtils";
@@ -80,6 +81,16 @@ export const serverApi = {
 
   // GET /config
   getConfig: () => apiCall<AppConfig>("/config"),
+
+  // POST /hot-swap
+  hotSwap: (binaryPath: string) =>
+    apiCall<HotSwapResult>("/hot-swap", {
+      method: "POST",
+      body: JSON.stringify({ binary_path: binaryPath }),
+    }),
+
+  // GET /hot-swap/status
+  getHotSwapStatus: () => apiCall<HandoffStatus>("/hot-swap/status"),
 };
 
 // Backend API functions

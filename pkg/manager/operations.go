@@ -382,6 +382,9 @@ func (im *instanceManager) DeleteInstance(name string) error {
 // StartInstance starts a stopped instance and returns it.
 // If the instance is already running, it returns an error.
 func (im *instanceManager) StartInstance(name string) (*instance.Instance, error) {
+	if im.swapping {
+		return nil, ErrHotSwapInProgress
+	}
 	inst, exists := im.registry.get(name)
 	if !exists {
 		return nil, fmt.Errorf("instance with name %s not found", name)
@@ -441,6 +444,9 @@ func (im *instanceManager) AtMaxRunning() bool {
 
 // StopInstance stops a running instance and returns it.
 func (im *instanceManager) StopInstance(name string) (*instance.Instance, error) {
+	if im.swapping {
+		return nil, ErrHotSwapInProgress
+	}
 	inst, exists := im.registry.get(name)
 	if !exists {
 		return nil, fmt.Errorf("instance with name %s not found", name)
@@ -484,6 +490,9 @@ func (im *instanceManager) StopInstance(name string) (*instance.Instance, error)
 
 // RestartInstance stops and then starts an instance, returning the updated instance.
 func (im *instanceManager) RestartInstance(name string) (*instance.Instance, error) {
+	if im.swapping {
+		return nil, ErrHotSwapInProgress
+	}
 	inst, exists := im.registry.get(name)
 	if !exists {
 		return nil, fmt.Errorf("instance with name %s not found", name)

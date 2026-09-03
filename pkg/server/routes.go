@@ -43,6 +43,11 @@ func SetupRouter(handler *Handler) *chi.Mux {
 
 		r.Get("/config", handler.ConfigHandler())
 
+		// Hot-swap endpoints (Windows only)
+		r.Post("/hot-swap", handler.HotSwapHandler())
+		r.Get("/hot-swap/status", handler.HotSwapStatusHandler())
+		r.Get("/hot-swap/candidates", handler.HotSwapCandidatesHandler())
+
 		// API key management endpoints
 		r.Route("/auth", func(r chi.Router) {
 			r.Route("/keys", func(r chi.Router) {

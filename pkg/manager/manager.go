@@ -2,15 +2,22 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"llamactl/pkg/config"
 	"llamactl/pkg/database"
 	"llamactl/pkg/instance"
 	"log"
+	"net"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 )
+
+// ErrHotSwapInProgress is returned by instance actions while a hot-swap holds the swap mutex.
+var ErrHotSwapInProgress = errors.New("server is updating")
 
 // InstanceManager defines the interface for managing instances of the llama server.
 type InstanceManager interface {
@@ -40,12 +47,31 @@ type instanceManager struct {
 	remote    *remoteManager
 	lifecycle *lifecycleManager
 
+	// Connection tracking for hot-swap socket handoff.
+	connTracker interface {
+		ActiveConns() []net.Conn
+	}
+
+	// Adopted client connections handed off during a hot-swap (B-side).
+	adoptedConns []net.Conn
+	adoptedFiles []*os.File
+
+	// hotSwapExit is closed after a successful swap so main can exit
+	// without Shutdown() (which would kill model children).
+	hotSwapExit     chan struct{}
+	hotSwapExitOnce sync.Once
+
 	// Configuration
 	globalConfig *config.AppConfig
 
 	// Synchronization
 	instanceLocks sync.Map // map[string]*sync.Mutex - per-instance locks for concurrent operations
 	shutdownOnce  sync.Once
+
+	// Swap mutex: held during a hot-swap to prevent concurrent
+	// instance actions (start/stop/restart) from interfering.
+	swapMutex sync.Mutex
+	swapping  bool // True while a hot-swap is in progress
 
 	// Event bus for status-change broadcasts (SSE)
 	events *eventBus
@@ -87,10 +113,51 @@ func New(globalConfig *config.AppConfig, db database.InstanceStore) InstanceMana
 		log.Printf("Error loading instances: %v", err)
 	}
 
+	im.startupSweep()
+
 	// Start the lifecycle manager
 	im.lifecycle.start()
 
 	return im
+}
+
+// SetConnectionTracker registers the connection tracker used for hot-swap
+// socket handoff. Called by the server after creating the tracking listener.
+func (im *instanceManager) SetConnectionTracker(ct interface {
+	ActiveConns() []net.Conn
+}) {
+	im.connTracker = ct
+}
+
+// CloseListener shuts down the server's listener, unblocking the
+// http.Server's Accept loop so the process can exit.
+func (im *instanceManager) CloseListener() {
+	if im.connTracker != nil {
+		if cl, ok := im.connTracker.(interface{ Close() error }); ok {
+			cl.Close()
+		}
+	}
+}
+
+// SetHotSwapExit registers the channel main waits on after a successful swap.
+func (im *instanceManager) SetHotSwapExit(ch chan struct{}) {
+	im.hotSwapExit = ch
+}
+
+// SignalHotSwapExit tells main to leave without killing model children.
+// Safe to call more than once.
+func (im *instanceManager) SignalHotSwapExit() {
+	if im.hotSwapExit == nil {
+		return
+	}
+	im.hotSwapExitOnce.Do(func() {
+		close(im.hotSwapExit)
+	})
+}
+
+// AdoptedConns returns client sockets B received from A during a hot-swap.
+func (im *instanceManager) AdoptedConns() []net.Conn {
+	return im.adoptedConns
 }
 
 // persistInstance saves an instance using the persistence layer
@@ -147,6 +214,11 @@ func (im *instanceManager) loadInstances() error {
 	}
 
 	log.Printf("Loaded %d instances from persistence", len(instances))
+
+	// Adopt running instances from a prior llamactl generation (hot-swap).
+	// For each instance that has a runtime.json, check if the model child
+	// is still alive and healthy. If so, mark it as adopted and running.
+	im.adoptRunningInstances()
 
 	// Auto-start instances that have auto-restart enabled
 	go im.autoStartInstances()
@@ -211,6 +283,51 @@ func (im *instanceManager) loadInstance(persistedInst *instance.Instance) error 
 	}
 
 	return nil
+}
+
+// adoptRunningInstances checks for model children left running by a prior
+// llamactl generation (hot-swap) and adopts them. For each instance that
+// has a runtime.json, it verifies the PID is alive and the /health endpoint
+// responds, then marks the instance as Running with adopted=true.
+//
+// Instances whose PID is dead get their stale runtime state cleaned up.
+func (im *instanceManager) adoptRunningInstances() {
+	instances := im.registry.list()
+	adopted := 0
+	stale := 0
+
+	for _, inst := range instances {
+		if inst.IsRemote() {
+			continue // Remote instances are not adopted locally.
+		}
+
+		// Check if there's a runtime state file for this instance.
+		instanceDir := filepath.Join(im.globalConfig.Instances.InstancesDir, inst.Name)
+		state, err := instance.ReadRuntimeState(instanceDir)
+		if err != nil {
+			log.Printf("Adoption: failed to read runtime state for %s: %v", inst.Name, err)
+			continue
+		}
+		if state == nil {
+			continue // No runtime state; not started by a prior generation.
+		}
+
+		// Try to adopt.
+		if err := inst.Adopt(); err != nil {
+			log.Printf("Adoption: instance %s: %v", inst.Name, err)
+			stale++
+			continue
+		}
+
+		// Adopted successfully. Mark in the registry.
+		im.registry.markRunning(inst.Name)
+		log.Printf("Adoption: instance %s adopted (PID %d, port %d)", inst.Name, state.PID, state.Port)
+		adopted++
+	}
+
+	if adopted > 0 || stale > 0 {
+		log.Printf("Adoption complete: %d adopted, %d stale", adopted, stale)
+	}
 }
 
 // autoStartInstances starts instances that were running when persisted and have auto-restart enabled
@@ -331,6 +448,27 @@ func (im *instanceManager) getNodeForInstance(inst *instance.Instance) *config.N
 	}
 
 	return nil
+}
+
+// IsSwapping returns true if a hot-swap is currently in progress.
+func (im *instanceManager) IsSwapping() bool {
+	return im.swapping
+}
+
+// AcquireSwap acquires the swap mutex. Returns an error if the swap is
+// already in progress (caller should return 503 to the client).
+func (im *instanceManager) AcquireSwap() error {
+	if !im.swapMutex.TryLock() {
+		return fmt.Errorf("hot-swap already in progress")
+	}
+	im.swapping = true
+	return nil
+}
+
+// ReleaseSwap releases the swap mutex.
+func (im *instanceManager) ReleaseSwap() {
+	im.swapping = false
+	im.swapMutex.Unlock()
 }
 
 // lockInstance returns the lock for a specific instance, creating one if needed.
