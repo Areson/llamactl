@@ -108,6 +108,39 @@ func (l *logger) close() {
 	l.logFile = nil
 }
 
+// attachTail opens the existing log file and begins reading from the given
+// byte offset. Used when adopting an instance from a prior llamactl
+// generation — the model child is still writing to the same log file,
+// and we want to continue reading from where the old process left off.
+func (l *logger) attachTail(offset int64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.logFilePath == "" {
+		if l.logDir == "" {
+			return fmt.Errorf("log file path not set for instance %s", l.name)
+		}
+		l.logFilePath = fmt.Sprintf("%s/%s.log", l.logDir, l.name)
+	}
+
+	// Child owns the log file (writes directly). We only reopen timber so
+	// GetLogs/UI still work and we can write a resume marker.
+	t := &timber.Logger{
+		Filename:    l.logFilePath,
+		MaxSize:     0,
+		MaxBackups:  0,
+		Compression: "none",
+		FileMode:    0644,
+		LocalTime:   true,
+	}
+
+	ts := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Fprintf(t, "\n=== Instance %s log tail resumed at %s (offset %d) ===\n", l.name, ts, offset)
+
+	l.logFile = t
+	return nil
+}
+
 // path returns the absolute path to the instance's log file, or "" if logging
 // is not configured. Intended for read-only consumers (e.g. the throughput
 // stats parser) that need to read the file directly.

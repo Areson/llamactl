@@ -6,6 +6,7 @@ import InstanceDialog from "@/components/InstanceDialog";
 import LoginDialog from "@/components/LoginDialog";
 import SystemInfoDialog from "./components/SystemInfoDialog";
 import SettingsDialog from "./components/settings/SettingsDialog";
+import { HotSwapDialog } from "./components/HotSwapDialog";
 import type { CreateInstanceOptions, Instance } from "@/types/instance";
 import { useInstances } from "@/contexts/InstancesContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,6 +14,7 @@ import { ModelsProvider } from "@/contexts/ModelsContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { Toaster } from "sonner";
 import { cn } from "@/lib/utils";
+import { useHotSwap } from "@/hooks/useHotSwap";
 
 function App() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
@@ -20,10 +22,12 @@ function App() {
   const [isInstanceModalOpen, setIsInstanceModalOpen] = useState(false);
   const [isSystemInfoModalOpen, setIsSystemInfoModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isHotSwapModalOpen, setIsHotSwapModalOpen] = useState(false);
   const [editingInstance, setEditingInstance] = useState<Instance | undefined>(
     undefined
   );
   const { createInstance, updateInstance } = useInstances();
+  const { supported: hotSwapSupported } = useHotSwap();
 
   const handleCreateInstance = () => {
     setEditingInstance(undefined);
@@ -84,6 +88,7 @@ function App() {
           onCreateInstance={handleCreateInstance}
           onShowSystemInfo={handleShowSystemInfo}
           onShowSettings={handleShowSettings}
+          onShowHotSwap={hotSwapSupported ? () => setIsHotSwapModalOpen(true) : undefined}
         />
         <main className="container mx-auto max-w-4xl px-4 py-8">
           {/* Tab Navigation */}
@@ -140,6 +145,11 @@ function App() {
         <SettingsDialog
           open={isSettingsModalOpen}
           onOpenChange={setIsSettingsModalOpen}
+        />
+
+        <HotSwapDialog
+          open={isHotSwapModalOpen}
+          onOpenChange={setIsHotSwapModalOpen}
         />
 
         <Toaster />

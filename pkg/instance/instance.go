@@ -32,6 +32,12 @@ type Instance struct {
 	process *process `json:"-"`
 	proxy   *proxy   `json:"-"`
 	logger  *logger  `json:"-"`
+
+	// Adopted is true if this instance was adopted from a prior llamactl
+	// generation (hot-swap). The model child is running but was started
+	// by a different process. Stop() signals the PID rather than using
+	// the pipe-based stop path.
+	adopted bool `json:"-"`
 }
 
 // New creates a new instance with the given name, log path, options and local node name
@@ -134,6 +140,57 @@ func (i *Instance) Stop() error {
 	return i.process.stop()
 }
 
+// Adopt takes ownership of a running model child from a prior llamactl
+// generation. It verifies the PID is alive and the /health endpoint
+// responds, then marks the instance as Running with adopted=true.
+//
+// This is called by the successor (B) on startup when it finds a
+// runtime.json for an instance whose process is still alive.
+func (i *Instance) Adopt() error {
+	if i.IsRemote() {
+		return fmt.Errorf("instance %s is remote; cannot adopt locally", i.Name)
+	}
+
+	instanceDir := filepath.Join(i.globalInstanceSettings.InstancesDir, i.Name)
+	state, err := ReadRuntimeState(instanceDir)
+	if err != nil {
+		return fmt.Errorf("failed to read runtime state: %w", err)
+	}
+	if state == nil {
+		return fmt.Errorf("no runtime state found for instance %s", i.Name)
+	}
+
+	// Verify the PID is alive.
+	if !PIDAlive(state.PID) {
+		// Process is dead. Remove the stale state file.
+		RemoveRuntimeState(instanceDir)
+		return fmt.Errorf("instance %s: PID %d is not alive (stale runtime state)", i.Name, state.PID)
+	}
+
+	// Verify the /health endpoint responds.
+	host := i.GetHost()
+	port := i.GetPort()
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if err := probeHealth(host, port, 10); err != nil {
+		return fmt.Errorf("instance %s: health probe failed: %w", i.Name, err)
+	}
+
+	// Mark as adopted and running.
+	i.adopted = true
+	i.SetStatus(Running)
+
+	if i.logger != nil {
+		if err := i.logger.attachTail(state.LogOffset); err != nil {
+			log.Printf("Instance %s: warning: log tail attach failed: %v", i.Name, err)
+		}
+	}
+
+	log.Printf("Instance %s: adopted (PID %d, port %d, generation %d)", i.Name, state.PID, state.Port, state.Generation)
+	return nil
+}
+
 // Restart restarts the instance
 func (i *Instance) Restart() error {
 	if i.process == nil {
@@ -179,6 +236,17 @@ func (i *Instance) SetStatus(s Status) {
 	if i.status != nil {
 		i.status.set(s)
 	}
+}
+
+// IsAdopted returns true if this instance was adopted from a prior
+// llamactl generation (hot-swap).
+func (i *Instance) IsAdopted() bool {
+	return i.adopted
+}
+
+// SetAdopted marks this instance as adopted (or not).
+func (i *Instance) SetAdopted(adopted bool) {
+	i.adopted = adopted
 }
 
 // IsRunning returns true if the status is Running
