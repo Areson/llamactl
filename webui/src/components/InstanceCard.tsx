@@ -125,20 +125,11 @@ function InstanceCard({
             <CardTitle className="text-lg font-semibold leading-tight break-words">
               {instance.name}
             </CardTitle>
-            
+
             {/* Badges row */}
             <div className="flex items-center gap-2 flex-wrap">
               <BackendBadge backend={instance.options?.backend_type} docker={instance.options?.docker_enabled} />
               {running && <HealthBadge health={health} />}
-              {running && instance.options?.backend_type === "llama_cpp" && (
-                <ThroughputBadge instanceName={instance.name} instanceStatus={instance.status} />
-              )}
-              {instance.options?.group && (
-                <Badge variant="outline" className="text-xs">
-                  <Layers className="h-3 w-3 mr-1" />
-                  {instance.options.group}
-                </Badge>
-              )}
               {isLlamaCpp && running && totalModels > 1 && (
                 <Badge variant="secondary" className="text-xs">
                   <Boxes className="h-3 w-3 mr-1" />
@@ -146,10 +137,23 @@ function InstanceCard({
                 </Badge>
               )}
             </div>
+
+            {/* Group label */}
+            {instance.options?.group && (
+              <Badge variant="outline" className="text-xs">
+                <Layers className="h-3 w-3 mr-1" />
+                {instance.options.group}
+              </Badge>
+            )}
+
+            {/* Throughput — own row, keeps its wide sparkline out of the badge wrap */}
+            {running && instance.options?.backend_type === "llama_cpp" && (
+              <ThroughputBadge instanceName={instance.name} instanceStatus={instance.status} />
+            )}
           </div>
         </CardHeader>
 
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 mt-auto">
           {/* Primary actions - always visible */}
           <div className="flex items-center gap-2 mb-3">
             <Button
