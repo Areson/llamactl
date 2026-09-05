@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"llamactl/pkg/config"
 	"llamactl/pkg/database"
 	"llamactl/pkg/manager"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -33,6 +35,46 @@ var isWindows = runtime.GOOS == "windows"
 // @securityDefinitions.apikey ApiKeyAuth
 // @in header
 // @name X-API-Key
+// setupLogFile redirects os.Stdout and os.Stderr to a log file in the
+// data directory, while still writing to the original stdout (tee).
+// This ensures B-side (hot-swap) and wrapper-adopted processes have
+// persistent logs regardless of how they were launched.
+func setupLogFile(dataDir string) {
+	logPath := filepath.Join(dataDir, "llamactl-server.log")
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not open log file %s: %v\n", logPath, err)
+		return
+	}
+
+	origStdout := os.Stdout
+	tee := &teeWriter{w1: origStdout, w2: f}
+
+	log.SetOutput(tee)
+	// os.Stdout is *os.File on Windows; we can't assign a *teeWriter to it.
+	// log.SetOutput(tee) covers all log.Printf calls. fmt.Println/Printf
+	// calls that use os.Stdout directly are rare in this codebase.
+
+	fmt.Fprintf(tee, "=== llamactl log started (PID %d) ===\n", os.Getpid())
+}
+
+// teeWriter writes to two writers simultaneously.
+type teeWriter struct {
+	w1, w2 io.Writer
+}
+
+func (t *teeWriter) Write(p []byte) (int, error) {
+	_, err1 := t.w2.Write(p)
+	_, err2 := t.w1.Write(p)
+	if err1 != nil {
+		return 0, err1
+	}
+	if err2 != nil {
+		return 0, err2
+	}
+	return len(p), nil
+}
+
 func main() {
 
 	// --version flag to print the version
@@ -66,6 +108,11 @@ func main() {
 			log.Printf("Error creating log directory %s: %v\nInstance logs will not be available.", cfg.Instances.LogsDir, err)
 		}
 	}
+
+	// Tee log file: all Go log.Printf / fmt.Println output goes here
+	// and to the console. This captures A's and B's Go-level logs
+	// (adoption decisions, health probes, proxy errors, swap protocol).
+	setupLogFile(cfg.DataDir)
 
 	// Initialize database
 	db, err := database.Open(&database.Config{
@@ -174,12 +221,25 @@ func main() {
 			m.SetConnectionTracker(tl)
 		}
 		ln = tl
+		log.Printf("HotSwapB: listener chain ready (TrackingListener wrapping %T)", tl)
+	} else {
+		log.Printf("HotSwapB: no TrackingListener (not Windows)")
 	}
+
+	log.Printf("HotSwapB: starting Serve() on %s (listener type: %T)", ln.Addr(), ln)
 
 	// Start serving.
 	go func() {
-		if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		log.Printf("HotSwapB: Serve() goroutine started")
+		err := httpServer.Serve(ln)
+		log.Printf("HotSwapB: Serve() returned: err=%v", err)
+		if err != nil && err != http.ErrServerClosed {
 			log.Printf("Error serving: %v\n", err)
+			select {
+			case <-hotSwapExit:
+			default:
+				close(hotSwapExit)
+			}
 		}
 	}()
 

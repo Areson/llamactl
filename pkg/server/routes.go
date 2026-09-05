@@ -16,6 +16,9 @@ func SetupRouter(handler *Handler) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 
+	// Record the request path on each connection for hot-swap SSE skipping.
+	r.Use(ConnPathMiddleware)
+
 	// Add CORS middleware
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   handler.cfg.Server.AllowedOrigins,

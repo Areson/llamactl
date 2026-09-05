@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"llamactl/pkg/config"
 	"llamactl/pkg/database"
+	"llamactl/pkg/hotswap"
 	"llamactl/pkg/instance"
 	"log"
 	"net"
@@ -55,6 +56,8 @@ type instanceManager struct {
 	// Adopted client connections handed off during a hot-swap (B-side).
 	adoptedConns []net.Conn
 	adoptedFiles []*os.File
+	// AcceptLoop for V2 listener handoff (B-side). Nil for V1 rebind-only.
+	adoptedAcceptLoop *hotswap.AcceptLoop
 
 	// hotSwapExit is closed after a successful swap so main can exit
 	// without Shutdown() (which would kill model children).
@@ -339,6 +342,10 @@ func (im *instanceManager) autoStartInstances() {
 	var instancesToStop []*instance.Instance
 
 	for _, inst := range instances {
+		if inst.IsAdopted() {
+			// Adopted from hot-swap — already running, don't restart
+			continue
+		}
 		if inst.IsRunning() && // Was running when persisted
 			inst.GetOptions() != nil &&
 			inst.GetOptions().AutoRestart != nil {
