@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"llamactl/pkg/config"
 	"llamactl/pkg/database"
-	"llamactl/pkg/hotswap"
 	"llamactl/pkg/instance"
 	"log"
 	"net"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -55,9 +53,6 @@ type instanceManager struct {
 
 	// Adopted client connections handed off during a hot-swap (B-side).
 	adoptedConns []net.Conn
-	adoptedFiles []*os.File
-	// AcceptLoop for V2 listener handoff (B-side). Nil for V1 rebind-only.
-	adoptedAcceptLoop *hotswap.AcceptLoop
 
 	// hotSwapExit is closed after a successful swap so main can exit
 	// without Shutdown() (which would kill model children).
@@ -156,11 +151,6 @@ func (im *instanceManager) SignalHotSwapExit() {
 	im.hotSwapExitOnce.Do(func() {
 		close(im.hotSwapExit)
 	})
-}
-
-// AdoptedConns returns client sockets B received from A during a hot-swap.
-func (im *instanceManager) AdoptedConns() []net.Conn {
-	return im.adoptedConns
 }
 
 // persistInstance saves an instance using the persistence layer

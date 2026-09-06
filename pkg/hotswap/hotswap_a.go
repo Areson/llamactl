@@ -1,8 +1,6 @@
 //go:build windows
 
 // Package hotswap: A-side orchestration.
-// Moved from pkg/manager/hotswap.go.
-
 package hotswap
 
 import (
@@ -26,38 +24,29 @@ type SocketSource interface {
 
 // ASideOptions configures the A-side of a hot-swap.
 type ASideOptions struct {
-	// BinaryPath is the path to the new llamactl binary.
-	BinaryPath string
-	// DataDir is the data directory (for handoff-state.json).
-	DataDir string
-	// ConfigEnv is the environment for B (with abs config path).
-	ConfigEnv []string
-	// SocketSource provides socket handles for duplication. Optional.
+	BinaryPath   string
+	DataDir      string
+	ConfigEnv    []string
 	SocketSource SocketSource
-	// Drainer tracks in-flight work for the drain. Optional.
-	Drainer Drainer
-	// DrainTimeout is the maximum drain time. Default 5s.
+	Drainer      Drainer
 	DrainTimeout time.Duration
 }
 
 // ASide runs the A-side of a hot-swap:
 //  1. Write handoff state (PhaseStarting)
-//  2. Pick free port, copy binary, spawn B
+//  2. Pick free port, rename old binary, copy new, spawn B
 //  3. Dial B, exchange READY/DUP/BYE/ACK
 //  4. Drain in-flight work
-//  5. Rename binaries (atomic swap)
-//  6. Caller closes listener and exits
+//  5. Caller closes listener and exits
 func ASide(opts ASideOptions) error {
 	if opts.DrainTimeout == 0 {
 		opts.DrainTimeout = 5 * time.Second
 	}
-
-	aPID := os.Getpid()
 	dataDir := opts.DataDir
 
 	state := &HandoffState{
 		Phase:      PhaseStarting,
-		APID:       aPID,
+		APID:       os.Getpid(),
 		BinaryPath: opts.BinaryPath,
 		StartedAt:  time.Now(),
 	}
@@ -65,45 +54,30 @@ func ASide(opts ASideOptions) error {
 		return fmt.Errorf("failed to write initial handoff state: %w", err)
 	}
 
-	// Pick a free port for the handoff channel.
 	port, err := pickFreePort()
 	if err != nil {
-		failASide(dataDir, "failed to pick free port: %v", err)
-		return fmt.Errorf("failed to pick free port: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to pick free port: %w", err))
 	}
 	state.HandoffPort = port
 
-	// Resolve the production executable path.
 	aExe, err := os.Executable()
 	if err != nil {
-		failASide(dataDir, "failed to get executable path: %v", err)
-		return fmt.Errorf("failed to get executable path: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to get executable path: %w", err))
 	}
 
 	// Step 1: rename the running binary out of the way.
 	// Windows allows renaming a running .exe — the process keeps running.
 	oldPath := aExe + ".old"
+	os.Remove(oldPath) // idempotent: clear any leftover from a previous swap
 	if err := os.Rename(aExe, oldPath); err != nil {
-		// If the old file already exists from a previous swap, remove it first.
-		if os.IsExist(err) {
-			os.Remove(oldPath)
-			if err := os.Rename(aExe, oldPath); err != nil {
-				failASide(dataDir, "failed to rename old binary: %v", err)
-				return fmt.Errorf("failed to rename old binary: %w", err)
-			}
-		} else {
-			failASide(dataDir, "failed to rename old binary: %v", err)
-			return fmt.Errorf("failed to rename old binary: %w", err)
-		}
+		return failASide(dataDir, fmt.Errorf("failed to rename old binary: %w", err))
 	}
 	log.Printf("ASide: renamed %s → %s", aExe, oldPath)
 
 	// Step 2: copy the new binary into the production path.
 	if err := copyFile(opts.BinaryPath, aExe); err != nil {
-		// Rollback: restore the old binary.
-		os.Rename(oldPath, aExe)
-		failASide(dataDir, "failed to copy new binary: %v", err)
-		return fmt.Errorf("failed to copy new binary: %w", err)
+		os.Rename(oldPath, aExe) // rollback
+		return failASide(dataDir, fmt.Errorf("failed to copy new binary: %w", err))
 	}
 	log.Printf("ASide: copied %s → %s", opts.BinaryPath, aExe)
 
@@ -119,16 +93,12 @@ func ASide(opts ASideOptions) error {
 	}
 	cmd.Env = opts.ConfigEnv
 
-	// Capture B's stdout/stderr to a log file so we can diagnose
-	// startup failures. B also tees to its own file via setupLogFile,
-	// but this catches early output before B's Go runtime initializes.
+	// Capture B's stdout/stderr so we can diagnose startup failures.
 	if dataDir != "" {
 		bLogPath := filepath.Join(dataDir, "hotswap-b.log")
 		if bLog, err := os.OpenFile(bLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 			cmd.Stdout = bLog
 			cmd.Stderr = bLog
-		} else {
-			log.Printf("ASide: warning: could not open B log file: %v", err)
 		}
 	}
 
@@ -136,8 +106,7 @@ func ASide(opts ASideOptions) error {
 		CreationFlags: 0x00000008 | 0x00000200, // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 	}
 	if err := cmd.Start(); err != nil {
-		failASide(dataDir, "failed to spawn B: %v", err)
-		return fmt.Errorf("failed to spawn B: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to spawn B: %w", err))
 	}
 	bPID := cmd.Process.Pid
 	log.Printf("ASide: spawned B with PID %d", bPID)
@@ -145,8 +114,7 @@ func ASide(opts ASideOptions) error {
 	state.BPID = bPID
 	if err := WriteHandoffState(dataDir, state); err != nil {
 		cmd.Process.Kill()
-		failASide(dataDir, "failed to update handoff state: %v", err)
-		return fmt.Errorf("failed to update handoff state: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to update handoff state: %w", err))
 	}
 
 	// Dial B's handoff port.
@@ -162,30 +130,25 @@ func ASide(opts ASideOptions) error {
 	}
 	if conn == nil {
 		cmd.Process.Kill()
-		failASide(dataDir, "B did not open handoff port %d within 10s", port)
-		return fmt.Errorf("B did not open handoff port %d within 10s", port)
+		return failASide(dataDir, fmt.Errorf("B did not open handoff port %d within 10s", port))
 	}
 	defer conn.Close()
 
-	// Protocol exchange.
 	channel := NewHandoffChannelFromConn(conn)
 
 	readyLine, err := channel.ReadLine()
 	if err != nil {
 		cmd.Process.Kill()
-		failASide(dataDir, "failed to read READY from B: %v", err)
-		return fmt.Errorf("failed to read READY from B: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to read READY from B: %w", err))
 	}
 	bPIDFromReady, err := ParseReady(readyLine)
 	if err != nil {
 		cmd.Process.Kill()
-		failASide(dataDir, "failed to parse READY: %v", err)
-		return fmt.Errorf("failed to parse READY: %w", err)
+		return failASide(dataDir, fmt.Errorf("failed to parse READY: %w", err))
 	}
 	if bPIDFromReady != bPID {
 		cmd.Process.Kill()
-		failASide(dataDir, "PID mismatch: expected %d, got %d", bPID, bPIDFromReady)
-		return fmt.Errorf("PID mismatch: expected %d, got %d", bPID, bPIDFromReady)
+		return failASide(dataDir, fmt.Errorf("PID mismatch: expected %d, got %d", bPID, bPIDFromReady))
 	}
 	log.Printf("ASide: B (PID %d) is ready", bPID)
 
@@ -194,13 +157,10 @@ func ASide(opts ASideOptions) error {
 		log.Printf("ASide: warning: failed to update state to in_progress: %v", err)
 	}
 
-	// V1: rebind-only. Socket duplication is V2.
-	// If SocketSource is provided, duplicate each socket to B.
+	// Duplicate client sockets to B.
 	if opts.SocketSource != nil {
 		handles := opts.SocketSource.SocketHandles()
 		state.TotalSockets = len(handles)
-		log.Printf("ASide: duplicating %d client sockets to B", len(handles))
-
 		for _, fd := range handles {
 			blob, err := ws2.DuplicateSocket(fd, uint32(bPID))
 			if err != nil {
@@ -216,17 +176,13 @@ func ASide(opts ASideOptions) error {
 				log.Printf("ASide: failed to read GOT: %v", err)
 				continue
 			}
-			ok, errMsg, _ := ParseGOT(gotLine)
-			if !ok {
+			if ok, errMsg, _ := ParseGOT(gotLine); !ok {
 				log.Printf("ASide: B failed to adopt socket: %s", errMsg)
 				continue
 			}
 			state.SocketsHandedOff++
-			log.Printf("ASide: socket handed off (%d/%d)", state.SocketsHandedOff, len(handles))
 		}
-	} else {
-		state.TotalSockets = 0
-		log.Printf("ASide: V1 rebind-only mode; no socket handoff")
+		log.Printf("ASide: socket handoff complete (%d/%d)", state.SocketsHandedOff, len(handles))
 	}
 
 	// BYE / ACK.
@@ -248,8 +204,6 @@ func ASide(opts ASideOptions) error {
 	// Cleanup: remove the old binary (best-effort — A is about to exit).
 	if err := os.Remove(oldPath); err != nil {
 		log.Printf("ASide: cleanup: could not remove %s: %v (will be swept on next startup)", oldPath, err)
-	} else {
-		log.Printf("ASide: cleanup: removed %s", oldPath)
 	}
 
 	now := time.Now()
@@ -263,18 +217,18 @@ func ASide(opts ASideOptions) error {
 	return nil
 }
 
-func failASide(dataDir string, format string, args ...interface{}) {
-	errMsg := fmt.Sprintf(format, args...)
-	log.Printf("ASide: FAILED: %s", errMsg)
-
+// failASide logs the error, records the failed state, and returns it.
+func failASide(dataDir string, err error) error {
+	log.Printf("ASide: FAILED: %s", err)
 	state, _ := ReadHandoffState(dataDir)
 	if state == nil {
 		state = &HandoffState{}
 	}
 	state.Phase = PhaseFailed
-	state.Error = errMsg
+	state.Error = err.Error()
 	WriteHandoffState(dataDir, state)
 	RemoveHandoffState(dataDir)
+	return err
 }
 
 func pickFreePort() (int, error) {
@@ -283,8 +237,7 @@ func pickFreePort() (int, error) {
 		return 0, err
 	}
 	defer l.Close()
-	addr := l.Addr().(*net.TCPAddr)
-	return addr.Port, nil
+	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 func copyFile(src, dst string) error {

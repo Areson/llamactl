@@ -198,12 +198,6 @@ func main() {
 		if ln == nil {
 			log.Fatalf("HotSwapB: failed to bind port %d after 30s", cfg.Server.Port)
 		}
-		if m, ok := instanceManager.(interface{ AdoptedConns() []net.Conn }); ok {
-			if conns := m.AdoptedConns(); len(conns) > 0 {
-				log.Printf("HotSwapB: injecting %d adopted client connections", len(conns))
-				ln = server.NewChainedListener(ln, conns)
-			}
-		}
 	} else {
 		ln, lnErr = net.Listen("tcp", addr)
 		if lnErr != nil {
@@ -221,18 +215,11 @@ func main() {
 			m.SetConnectionTracker(tl)
 		}
 		ln = tl
-		log.Printf("HotSwapB: listener chain ready (TrackingListener wrapping %T)", tl)
-	} else {
-		log.Printf("HotSwapB: no TrackingListener (not Windows)")
 	}
-
-	log.Printf("HotSwapB: starting Serve() on %s (listener type: %T)", ln.Addr(), ln)
 
 	// Start serving.
 	go func() {
-		log.Printf("HotSwapB: Serve() goroutine started")
 		err := httpServer.Serve(ln)
-		log.Printf("HotSwapB: Serve() returned: err=%v", err)
 		if err != nil && err != http.ErrServerClosed {
 			log.Printf("Error serving: %v\n", err)
 			select {
