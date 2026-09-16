@@ -4,6 +4,7 @@
 package hotswap
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -65,6 +66,18 @@ func ASide(opts ASideOptions) error {
 		return failASide(dataDir, fmt.Errorf("failed to get executable path: %w", err))
 	}
 
+	// Pre-flight: verify the target binary actually implements the B-side
+	// of the protocol. A pre-hot-swap target would start as a plain
+	// server, lose the port race against A, die, and leave the install
+	// wedged (A's image locked as .old, the new binary sitting at the
+	// production path with nothing to clean it up). Failing here is free.
+	if ok, perr := isBCapable(opts.BinaryPath); perr != nil {
+		return failASide(dataDir, fmt.Errorf("cannot probe target binary: %w", perr))
+	} else if !ok {
+		return failASide(dataDir, fmt.Errorf("target binary %s has no B-side (hot-swap) support; aborted before any filesystem change", opts.BinaryPath))
+	}
+	log.Printf("ASide: target %s is B-capable", opts.BinaryPath)
+
 	// Step 1: rename the running binary out of the way.
 	// Windows allows renaming a running .exe — the process keeps running.
 	oldPath := aExe + ".old"
@@ -76,7 +89,7 @@ func ASide(opts ASideOptions) error {
 
 	// Step 2: copy the new binary into the production path.
 	if err := copyFile(opts.BinaryPath, aExe); err != nil {
-		os.Rename(oldPath, aExe) // rollback
+		rollbackBinary(aExe, oldPath, nil)
 		return failASide(dataDir, fmt.Errorf("failed to copy new binary: %w", err))
 	}
 	log.Printf("ASide: copied %s → %s", opts.BinaryPath, aExe)
@@ -106,6 +119,7 @@ func ASide(opts ASideOptions) error {
 		CreationFlags: 0x00000008 | 0x00000200, // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 	}
 	if err := cmd.Start(); err != nil {
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("failed to spawn B: %w", err))
 	}
 	bPID := cmd.Process.Pid
@@ -113,7 +127,7 @@ func ASide(opts ASideOptions) error {
 
 	state.BPID = bPID
 	if err := WriteHandoffState(dataDir, state); err != nil {
-		cmd.Process.Kill()
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("failed to update handoff state: %w", err))
 	}
 
@@ -129,7 +143,7 @@ func ASide(opts ASideOptions) error {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if conn == nil {
-		cmd.Process.Kill()
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("B did not open handoff port %d within 10s", port))
 	}
 	defer conn.Close()
@@ -138,16 +152,16 @@ func ASide(opts ASideOptions) error {
 
 	readyLine, err := channel.ReadLine()
 	if err != nil {
-		cmd.Process.Kill()
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("failed to read READY from B: %w", err))
 	}
 	bPIDFromReady, err := ParseReady(readyLine)
 	if err != nil {
-		cmd.Process.Kill()
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("failed to parse READY: %w", err))
 	}
 	if bPIDFromReady != bPID {
-		cmd.Process.Kill()
+		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("PID mismatch: expected %d, got %d", bPID, bPIDFromReady))
 	}
 	log.Printf("ASide: B (PID %d) is ready", bPID)
@@ -229,6 +243,44 @@ func failASide(dataDir string, err error) error {
 	WriteHandoffState(dataDir, state)
 	RemoveHandoffState(dataDir)
 	return err
+}
+
+// BCapabilityMarker is embedded (as a string literal) in every build that
+// contains the hot-swap package. ASide scans the target binary for it
+// before mutating the filesystem, so a target without B-side support
+// fails fast instead of wedging the install.
+const BCapabilityMarker = "LLAMACTL_HOTSWAP_B_CAPABLE_v1"
+
+// isBCapable reports whether binaryPath contains the B-side marker.
+func isBCapable(binaryPath string) (bool, error) {
+	data, err := os.ReadFile(binaryPath)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Contains(data, []byte(BCapabilityMarker)), nil
+}
+
+// rollbackBinary restores the original binary to aExe after a failure in
+// the rename/copy/spawn phase. B is killed first if it was started, then
+// the rename is retried until the killed process releases its image
+// (Windows pins a running exe until it exits).
+func rollbackBinary(aExe, oldPath string, b *exec.Cmd) {
+	if b != nil && b.Process != nil {
+		b.Process.Kill()
+		go b.Process.Wait() // reap; do not block the rollback on it
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		os.Remove(aExe) // drop the copied target; it may not exist
+		if err := os.Rename(oldPath, aExe); err == nil {
+			log.Printf("ASide: rollback complete — original binary restored to %s", aExe)
+			return
+		} else if time.Now().After(deadline) {
+			log.Printf("ASide: ROLLBACK FAILED (manual recovery: kill the new llamactl, then rename %s back to %s)", oldPath, aExe)
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 func pickFreePort() (int, error) {
