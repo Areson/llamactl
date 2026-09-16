@@ -222,6 +222,18 @@ func main() {
 		err := httpServer.Serve(ln)
 		if err != nil && err != http.ErrServerClosed {
 			log.Printf("Error serving: %v\n", err)
+			// A non-Shutdown error here normally means the listener was
+			// closed out-of-band — i.e. a hot-swap handoff (manager.HotSwap
+			// → CloseListener). Signal main through the manager's
+			// once-guarded close so this path and the hot-swap handler can't
+			// both close the channel (panic: close of closed channel).
+			// The grace delay lets the in-flight hot-swap handler flush its
+			// response before the process exits.
+			time.Sleep(250 * time.Millisecond)
+			if m, ok := instanceManager.(interface{ SignalHotSwapExit() }); ok {
+				m.SignalHotSwapExit()
+				return
+			}
 			select {
 			case <-hotSwapExit:
 			default:
