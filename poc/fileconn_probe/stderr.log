@@ -1,0 +1,28 @@
+2026/09/03 11:38:15 A: starting pid=68468
+2026/09/03 11:38:15 A: dummy server listening on 127.0.0.1:50130
+2026/09/03 11:38:15 A: handoff port = 50131
+2026/09/03 11:38:15 A: spawned B (PID 30000)
+2026/09/03 11:38:15 B: starting pid=30000 handoffPort=50131
+2026/09/03 11:38:15 B: listening on handoff port 50131
+2026/09/03 11:38:16 A: connected to B's handoff port
+2026/09/03 11:38:16 B: accepted handoff connection from 127.0.0.1:50133
+2026/09/03 11:38:16 B: sent READY pid=30000
+2026/09/03 11:38:16 A: B says: READY pid=30000
+2026/09/03 11:38:16 A: spawned C (PID 70824)
+2026/09/03 11:38:16 A: about to accept client connection
+2026/09/03 11:38:16 C: starting, connecting to 127.0.0.1:50130
+2026/09/03 11:38:16 C: connected to 127.0.0.1:50130
+2026/09/03 11:38:16 A: accepted client from 127.0.0.1:50134
+2026/09/03 11:38:16 C: sent payload: "HELLO-FROM-C pid=...\n"
+2026/09/03 11:38:16 A: client socket handle = 548
+2026/09/03 11:38:16 A: WSADuplicateSocket OK, blob size = 624 bytes
+2026/09/03 11:38:16 A: sent DUP to B
+2026/09/03 11:38:16 B: adopted socket 368 (raw handle)
+2026/09/03 11:38:16 C: received response: "RESPONSE-FROM-B pid=30000 strategy=baseline data=\"HELLO-FROM-C pid=...\\n\"\n"
+2026/09/03 11:38:16 C: PASS — got a response from the adopted socket
+2026/09/03 11:38:16 B: strategy baseline SUCCESS — read "HELLO-FROM-C pid=...\n", wrote response
+2026/09/03 11:38:16 A: B says: GOT ok strategy=baseline detail=read+write OK, payload="HELLO-FROM-C pid=...\n"
+2026/09/03 11:38:16 A: SUCCESS — B adopted the socket and served the client
+2026/09/03 11:38:16 B: BYE received, closing handoff channel
+2026/09/03 11:38:16 A: B says: ACK
+2026/09/03 11:38:16 A: done

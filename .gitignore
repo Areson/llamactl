@@ -46,3 +46,5 @@ __debug*
 
 # Binary
 llamactl-*
+# Local build output (exe, test logs, test db)
+build/
