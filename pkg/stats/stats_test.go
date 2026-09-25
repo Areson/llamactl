@@ -47,6 +47,51 @@ func TestParsePairsPromptAndDecode(t *testing.T) {
 	}
 }
 
+// TestParseTabbyAPIEmitterLines pins the exact print_timing lines emitted by
+// tabbyAPI's common.gen_logging._emit_llamactl_timing (gated on
+// TABBYAPI_LLAMACTL_TIMING=1). If either side of the contract drifts - the
+// Python emitter or this parser - the model-throughput cards go dark.
+func TestParseTabbyAPIEmitterLines(t *testing.T) {
+	recs := Parse([]string{
+		"print_timing: id 1 | task 1790123216449 | prompt eval time = 1920.00 ms / 8192 tokens (0.23 ms per token, 4266.67 tokens per second)",
+		"print_timing: id 1 | task 1790123216449 | eval time = 4310.00 ms / 512 tokens (8.42 ms per token, 118.79 tokens per second)",
+		// Fully cached prompt: emitter skips the prompt line, decode only.
+		"print_timing: id 1 | task 1790123216450 | eval time = 210.00 ms / 8 tokens (26.25 ms per token, 38.10 tokens per second)",
+	})
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 records, got %d: %+v", len(recs), recs)
+	}
+
+	r := recs[0]
+	if r.SlotID != 1 || r.TaskID != 1790123216449 {
+		t.Errorf("wrong slot/task: %+v", r)
+	}
+	if r.PromptTokens != 8192 {
+		t.Errorf("PromptTokens = %d, want 8192", r.PromptTokens)
+	}
+	if math.Abs(r.PromptPerSec-4266.67) > 0.01 {
+		t.Errorf("PromptPerSec = %f, want ~4266.67", r.PromptPerSec)
+	}
+	if r.GenTokens != 512 {
+		t.Errorf("GenTokens = %d, want 512", r.GenTokens)
+	}
+	if math.Abs(r.GenPerSec-118.79) > 0.01 {
+		t.Errorf("GenPerSec = %f, want ~118.79", r.GenPerSec)
+	}
+	if math.Abs(r.GenPerTokMs-8.42) > 0.01 {
+		t.Errorf("GenPerTokMs = %f, want ~8.42", r.GenPerTokMs)
+	}
+
+	// Decode-only record (fully cached prompt).
+	r2 := recs[1]
+	if r2.PromptTokens != 0 {
+		t.Errorf("record2 PromptTokens should be 0, got %d", r2.PromptTokens)
+	}
+	if r2.GenTokens != 8 || math.Abs(r2.GenPerSec-38.10) > 0.01 {
+		t.Errorf("record2 gen = %d tok @ %f t/s, want 8 @ ~38.10", r2.GenTokens, r2.GenPerSec)
+	}
+}
+
 func TestParseIgnoresNonTimingLines(t *testing.T) {
 	recs := Parse([]string{
 		"x I slot print_timing: id 0 | task 1 |    graphs reused =       4230",
