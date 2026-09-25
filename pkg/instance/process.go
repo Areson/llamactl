@@ -27,7 +27,8 @@ type process struct {
 	stdin         io.Closer
 	stdout        io.ReadCloser
 	stderr        io.ReadCloser
-	childLog      *os.File // Windows: child stdout/stderr, survives parent death
+	childLog      *os.File    // Windows: child stdout/stderr, survives parent death
+	job           *processJob // Windows: Job Object for kill-tree; nil elsewhere
 	restarts      int
 	restartCancel context.CancelFunc
 	monitorDone   chan struct{}
@@ -109,12 +110,23 @@ func (p *process) start() error {
 
 	setProcAttrs(p.cmd)
 
+	// Windows: create a Job Object and inherit its handle into the child so
+	// stopping/killing tears down the whole tree (Tabby re-exec, uvicorn, etc.)
+	// while hot-swap can still leave the tree alive when llamactl A exits.
+	if job, jerr := newProcessJob(); jerr != nil {
+		log.Printf("Instance %s: Job Object unavailable (%v); continuing without kill-tree", p.instance.Name, jerr)
+	} else if job != nil {
+		p.job = job
+		p.job.prepareCmd(p.cmd)
+	}
+
 	if runtime.GOOS == "windows" {
 		// No pipes to the parent: when llamactl is hot-swapped, stdin EOF
 		// would stop the model and a broken stdout pipe would lose logs.
 		// Redirect to the log file and NUL so the child survives A's exit.
 		nul, err := os.OpenFile("NUL", os.O_RDWR, 0)
 		if err != nil {
+			p.closeJob()
 			p.instance.logger.close()
 			return fmt.Errorf("failed to open NUL: %w", err)
 		}
@@ -123,6 +135,7 @@ func (p *process) start() error {
 		lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			nul.Close()
+			p.closeJob()
 			p.instance.logger.close()
 			return fmt.Errorf("failed to open child log: %w", err)
 		}
@@ -133,17 +146,20 @@ func (p *process) start() error {
 		var err error
 		p.stdin, err = p.cmd.StdinPipe()
 		if err != nil {
+			p.closeJob()
 			p.instance.logger.close()
 			return fmt.Errorf("failed to get stdin pipe: %w", err)
 		}
 		p.stdout, err = p.cmd.StdoutPipe()
 		if err != nil {
+			p.closeJob()
 			p.instance.logger.close()
 			return fmt.Errorf("failed to get stdout pipe: %w", err)
 		}
 		p.stderr, err = p.cmd.StderrPipe()
 		if err != nil {
 			p.stdout.Close()
+			p.closeJob()
 			p.instance.logger.close()
 			return fmt.Errorf("failed to get stderr pipe: %w", err)
 		}
@@ -151,7 +167,16 @@ func (p *process) start() error {
 
 	if err := p.cmd.Start(); err != nil {
 		p.closeChildLog()
+		p.closeJob()
 		return fmt.Errorf("failed to start instance %s: %w", p.instance.Name, err)
+	}
+
+	// Assign immediately after Start (best-effort race window; see processJob docs).
+	if p.job != nil {
+		if aerr := p.job.assign(p.cmd.Process); aerr != nil {
+			log.Printf("Instance %s: AssignProcessToJobObject failed (%v); closing job, continuing", p.instance.Name, aerr)
+			p.closeJob()
+		}
 	}
 
 	p.instance.SetStatus(Running)
@@ -205,13 +230,17 @@ func (p *process) stop() error {
 		return p.stopAdopted()
 	}
 
-	// Capture this generation's pipes, cmd, and monitor channel before
+	// Capture this generation's pipes, cmd, job, and monitor channel before
 	// releasing the lock. start() may replace p.cmd/p.stdin while the
 	// inflight drain below runs; stop() must signal only the process it saw
 	// when it locked, never a newer generation.
 	cmd := p.cmd
 	stdin := p.stdin
+	job := p.job
 	monitorDone := p.monitorDone
+	// Detach job from the process struct so a concurrent restart cannot
+	// double-close; this stop owns teardown.
+	p.job = nil
 
 	p.mu.Unlock()
 
@@ -260,22 +289,33 @@ func (p *process) stop() error {
 		// Process exited normally
 		log.Printf("Instance %s shut down gracefully", p.instance.Name)
 	case <-time.After(killGrace):
-		// Force kill if it doesn't exit within 30 seconds
-		if cmd != nil && cmd.Process != nil {
+		// Force kill: prefer Job Object tree kill on Windows so Tabby/uvicorn
+		// grandchildren die with the root; fall back to Process.Kill.
+		if job != nil {
+			if kerr := job.killTree(); kerr != nil {
+				log.Printf("Instance %s: TerminateJobObject failed: %v", p.instance.Name, kerr)
+			} else {
+				log.Printf("Instance %s did not stop in time, job tree terminated", p.instance.Name)
+			}
+		} else if cmd != nil && cmd.Process != nil {
 			killErr := cmd.Process.Kill()
 			if killErr != nil {
 				log.Printf("Failed to force kill instance %s: %v", p.instance.Name, killErr)
 			}
 			log.Printf("Instance %s did not stop in time, force killed", p.instance.Name)
-
-			// Wait a bit more for the monitor to finish after force kill
-			select {
-			case <-monitorDone:
-				// Monitor completed after force kill
-			case <-time.After(10 * time.Second):
-				log.Printf("Warning: Monitor goroutine did not complete after force kill for instance %s", p.instance.Name)
-			}
 		}
+
+		// Wait a bit more for the monitor to finish after force kill
+		select {
+		case <-monitorDone:
+			// Monitor completed after force kill
+		case <-time.After(10 * time.Second):
+			log.Printf("Warning: Monitor goroutine did not complete after force kill for instance %s", p.instance.Name)
+		}
+	}
+
+	if job != nil {
+		job.close()
 	}
 
 	p.instance.logger.close()
@@ -410,6 +450,7 @@ func (p *process) monitorProcess() {
 	p.instance.SetStatus(Stopped)
 	p.instance.logger.close()
 	p.closeChildLog()
+	p.closeJob()
 	p.removeRuntimeState()
 
 	// Cancel any existing restart context since we're handling a new exit
@@ -608,6 +649,13 @@ func (p *process) closeChildLog() {
 	if p.childLog != nil {
 		_ = p.childLog.Close()
 		p.childLog = nil
+	}
+}
+
+func (p *process) closeJob() {
+	if p.job != nil {
+		p.job.close()
+		p.job = nil
 	}
 }
 
