@@ -47,6 +47,7 @@ const InstanceDialog: React.FC<InstanceDialogProps> = ({
   const llamaCppSettings = useBackendSettings(BackendType.LLAMA_CPP);
   const vllmSettings = useBackendSettings(BackendType.VLLM);
   const mlxSettings = useBackendSettings(BackendType.MLX_LM);
+  const tabbySettings = useBackendSettings(BackendType.TABBY_API);
 
   // Reset form when dialog opens/closes or when instance changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only re-run when dialog open state or instance prop changes
@@ -85,6 +86,8 @@ const InstanceDialog: React.FC<InstanceDialogProps> = ({
           dockerEnabled = vllmSettings?.dockerEnabled ?? false;
         } else if (value === BackendType.MLX_LM) {
           dockerEnabled = mlxSettings?.dockerEnabled ?? false;
+        } else if (value === BackendType.TABBY_API) {
+          dockerEnabled = tabbySettings?.dockerEnabled ?? false;
         }
 
         return {
@@ -134,7 +137,7 @@ const InstanceDialog: React.FC<InstanceDialogProps> = ({
     }
 
     // Validate docker_enabled and command_override relationship
-    if (formData.backend_type !== BackendType.MLX_LM) {
+    if (formData.backend_type !== BackendType.MLX_LM && formData.backend_type !== BackendType.TABBY_API) {
       if (formData.docker_enabled === true && formData.command_override) {
         setNameError("Command override cannot be set when Docker is enabled");
         return;

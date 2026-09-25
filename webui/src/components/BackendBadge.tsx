@@ -21,6 +21,8 @@ const BackendBadge: React.FC<BackendBadgeProps> = ({ backend, docker }) => {
         return "MLX";
       case BackendType.VLLM:
         return "vLLM";
+      case BackendType.TABBY_API:
+        return "Tabby";
       default:
         return backend;
     }
@@ -34,6 +36,8 @@ const BackendBadge: React.FC<BackendBadgeProps> = ({ backend, docker }) => {
         return "bg-green-100 text-green-800 border-green-200 dark:bg-green-900 dark:text-green-200 dark:border-green-800";
       case BackendType.VLLM:
         return "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900 dark:text-purple-200 dark:border-purple-800";
+      case BackendType.TABBY_API:
+        return "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900 dark:text-amber-200 dark:border-amber-800";
       default:
         return "bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:border-gray-800";
     }

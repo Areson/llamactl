@@ -119,6 +119,14 @@ export const backendsApi = {
         body: JSON.stringify({ command }),
       }),
   },
+  tabby: {
+    // POST /backends/tabby/parse-command
+    parseCommand: (command: string) =>
+      apiCall<CreateInstanceOptions>('/backends/tabby/parse-command', {
+        method: 'POST',
+        body: JSON.stringify({ command }),
+      }),
+  },
 };
 
 // Node API types

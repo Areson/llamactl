@@ -32,6 +32,8 @@ export const useBackendSettings = (backendType: string | undefined) => {
     ? 'mlx'
     : backendType === 'vllm'
     ? 'vllm'
+    : backendType === 'tabby_api'
+    ? 'tabby'
     : null
 
   if (!backendKey) {

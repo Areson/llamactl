@@ -54,6 +54,9 @@ const ParseCommandDialog: React.FC<ParseCommandDialogProps> = ({
         case BackendType.VLLM:
           options = await backendsApi.vllm.parseCommand(command);
           break;
+        case BackendType.TABBY_API:
+          options = await backendsApi.tabby.parseCommand(command);
+          break;
         default:
           throw new Error(`Unsupported backend type: ${String(backendType)}`);
       }
@@ -86,6 +89,7 @@ const ParseCommandDialog: React.FC<ParseCommandDialogProps> = ({
     [BackendType.LLAMA_CPP]: "llama-server --model /path/to/model.gguf --gpu-layers 32 --ctx-size 4096",
     [BackendType.MLX_LM]: "mlx_lm.server --model mlx-community/Mistral-7B-Instruct-v0.3-4bit --host 0.0.0.0 --port 8080",
     [BackendType.VLLM]: "vllm serve microsoft/DialoGPT-medium --tensor-parallel-size 2 --gpu-memory-utilization 0.9",
+    [BackendType.TABBY_API]: "python main.py --host 127.0.0.1 --port 8109 --model-name my-model --config /path/to/config.yml",
   };
 
   const getPlaceholderForBackend = (backendType: BackendTypeValue): string => {
@@ -109,6 +113,7 @@ const ParseCommandDialog: React.FC<ParseCommandDialogProps> = ({
                 {backendType === BackendType.LLAMA_CPP && 'Llama Server'}
                 {backendType === BackendType.MLX_LM && 'MLX LM'}
                 {backendType === BackendType.VLLM && 'vLLM'}
+                {backendType === BackendType.TABBY_API && 'TabbyAPI'}
               </span>
             </Label>
           </div>

@@ -16,7 +16,11 @@ import {
   VllmBackendOptionsSchema,
   type VllmBackendOptions,
   getAllVllmFieldKeys,
-  getVllmFieldType
+  getVllmFieldType,
+  TabbyBackendOptionsSchema,
+  type TabbyBackendOptions,
+  getAllTabbyFieldKeys,
+  getTabbyFieldType
 } from './backends'
 
 // Backend options union
@@ -24,6 +28,7 @@ export const BackendOptionsSchema = z.union([
   LlamaCppBackendOptionsSchema,
   MlxBackendOptionsSchema,
   VllmBackendOptionsSchema,
+  TabbyBackendOptionsSchema,
 ])
 
 // Define the main create instance options schema
@@ -43,7 +48,7 @@ export const CreateInstanceOptionsSchema = z.object({
   command_override: z.string().optional(),
 
   // Backend configuration
-  backend_type: z.enum([BackendType.LLAMA_CPP, BackendType.MLX_LM, BackendType.VLLM]).optional(),
+  backend_type: z.enum([BackendType.LLAMA_CPP, BackendType.MLX_LM, BackendType.VLLM, BackendType.TABBY_API]).optional(),
   backend_options: BackendOptionsSchema.optional(),
 
   // Node configuration
@@ -61,15 +66,19 @@ export {
   LlamaCppBackendOptionsSchema,
   MlxBackendOptionsSchema,
   VllmBackendOptionsSchema,
+  TabbyBackendOptionsSchema,
   type LlamaCppBackendOptions,
   type MlxBackendOptions,
   type VllmBackendOptions,
+  type TabbyBackendOptions,
   getAllLlamaCppFieldKeys,
   getAllMlxFieldKeys,
   getAllVllmFieldKeys,
+  getAllTabbyFieldKeys,
   getLlamaCppFieldType,
   getMlxFieldType,
   getVllmFieldType,
+  getTabbyFieldType,
   // LlamaCpp Alt Keys
   getAllLlamaCppAltKeys,
   getLlamaCppAltKeyType

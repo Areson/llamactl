@@ -47,6 +47,7 @@ const BACKEND_OPTIONS = [
   { value: BackendType.LLAMA_CPP, label: 'Llama Server' },
   { value: BackendType.MLX_LM, label: 'MLX LM' },
   { value: BackendType.VLLM, label: 'vLLM' },
+  { value: BackendType.TABBY_API, label: 'TabbyAPI' },
 ]
 
 const SystemInfoDialog: React.FC<SystemInfoDialogProps> = ({

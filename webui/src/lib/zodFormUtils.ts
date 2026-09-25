@@ -2,15 +2,19 @@ import {
   type LlamaCppBackendOptions,
   type MlxBackendOptions,
   type VllmBackendOptions,
+  type TabbyBackendOptions,
   LlamaCppBackendOptionsSchema,
   MlxBackendOptionsSchema,
   VllmBackendOptionsSchema,
+  TabbyBackendOptionsSchema,
   getAllLlamaCppFieldKeys,
   getAllMlxFieldKeys,
   getAllVllmFieldKeys,
+  getAllTabbyFieldKeys,
   getLlamaCppFieldType,
   getMlxFieldType,
-  getVllmFieldType
+  getVllmFieldType,
+  getTabbyFieldType
 } from '@/schemas/instanceOptions'
 
 // LlamaCpp backend-specific basic fields
@@ -102,17 +106,52 @@ const basicVllmFieldsConfig: Record<string, {
   }
 }
 
+// TabbyAPI backend-specific basic fields
+const basicTabbyFieldsConfig: Record<string, {
+  label: string
+  description?: string
+  placeholder?: string
+}> = {
+  model_name: {
+    label: 'Model Name',
+    placeholder: 'Huihui-Qwen3.8-27B-abliterated-exl3-4.00bpw',
+    description: 'Directory name under model_dir (or leave empty to use config.yml)'
+  },
+  model_dir: {
+    label: 'Model Directory',
+    placeholder: 'E:\\Model Cache\\tabbyapi\\models',
+    description: 'Root directory containing model folders'
+  },
+  config: {
+    label: 'Config Path',
+    placeholder: 'E:\\Model Cache\\tabbyapi\\tabbyAPI\\config.yml',
+    description: 'Optional absolute path to an overriding config.yml'
+  },
+  host: {
+    label: 'Host',
+    placeholder: '127.0.0.1',
+    description: 'Bind address (TABBY_NETWORK_HOST / --host)'
+  },
+  port: {
+    label: 'Port',
+    placeholder: '8109',
+    description: 'Listen port (TABBY_NETWORK_PORT / --port)'
+  }
+}
+
 // Backend field configuration lookup
 const backendFieldConfigs = {
   mlx_lm: basicMlxFieldsConfig,
   vllm: basicVllmFieldsConfig,
   llama_cpp: basicLlamaCppFieldsConfig,
+  tabby_api: basicTabbyFieldsConfig,
 } as const
 
 const backendFieldGetters = {
   mlx_lm: getAllMlxFieldKeys,
   vllm: getAllVllmFieldKeys,
   llama_cpp: getAllLlamaCppFieldKeys,
+  tabby_api: getAllTabbyFieldKeys,
 } as const
 
 export function getBasicBackendFields(backendType?: string): string[] {
@@ -137,7 +176,8 @@ export const basicBackendFieldsConfig: Record<string, {
 }> = {
   ...basicLlamaCppFieldsConfig,
   ...basicMlxFieldsConfig,
-  ...basicVllmFieldsConfig
+  ...basicVllmFieldsConfig,
+  ...basicTabbyFieldsConfig
 }
 
 // Get field type for any backend option (union type)
@@ -164,6 +204,15 @@ export function getBackendFieldType(key: string): 'text' | 'number' | 'boolean' 
   try {
     if (VllmBackendOptionsSchema.shape && key in VllmBackendOptionsSchema.shape) {
       return getVllmFieldType(key as keyof VllmBackendOptions)
+    }
+  } catch {
+    // Schema might not be available
+  }
+
+  // Try TabbyAPI schema
+  try {
+    if (TabbyBackendOptionsSchema.shape && key in TabbyBackendOptionsSchema.shape) {
+      return getTabbyFieldType(key as keyof TabbyBackendOptions)
     }
   } catch {
     // Schema might not be available

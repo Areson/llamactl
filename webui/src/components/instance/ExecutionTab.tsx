@@ -29,6 +29,8 @@ const ExecutionTab: React.FC<ExecutionTabProps> = ({
         return "vllm"
       case BackendType.MLX_LM:
         return "mlx_lm.server"
+      case BackendType.TABBY_API:
+        return "python"
       default:
         return ""
     }
@@ -44,12 +46,13 @@ const ExecutionTab: React.FC<ExecutionTabProps> = ({
         options={[
           { value: BackendType.LLAMA_CPP, label: 'Llama Server' },
           { value: BackendType.MLX_LM, label: 'MLX LM' },
-          { value: BackendType.VLLM, label: 'vLLM' }
+          { value: BackendType.VLLM, label: 'vLLM' },
+          { value: BackendType.TABBY_API, label: 'TabbyAPI' }
         ]}
         description="Select the backend server type"
       />
 
-      {formData.backend_type !== BackendType.MLX_LM && (
+      {formData.backend_type !== BackendType.MLX_LM && formData.backend_type !== BackendType.TABBY_API && (
         <CheckboxInput
           id="docker_enabled"
           label="Enable Docker"
@@ -59,7 +62,7 @@ const ExecutionTab: React.FC<ExecutionTabProps> = ({
         />
       )}
 
-      {(formData.backend_type === BackendType.MLX_LM || formData.docker_enabled !== true) && (
+      {(formData.backend_type === BackendType.MLX_LM || formData.backend_type === BackendType.TABBY_API || formData.docker_enabled !== true) && (
         <TextInput
           id="command_override"
           label="Command Override"

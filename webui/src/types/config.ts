@@ -17,6 +17,7 @@ export interface BackendConfig {
   'llama-cpp': BackendSettings
   vllm: BackendSettings
   mlx: BackendSettings
+  tabby: BackendSettings
 }
 
 export interface ServerConfig {

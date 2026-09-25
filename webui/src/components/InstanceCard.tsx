@@ -147,7 +147,7 @@ function InstanceCard({
             )}
 
             {/* Throughput — own row, keeps its wide sparkline out of the badge wrap */}
-            {running && instance.options?.backend_type === "llama_cpp" && (
+            {running && (instance.options?.backend_type === "llama_cpp" || instance.options?.backend_type === "tabby_api") && (
               <ThroughputBadge instanceName={instance.name} instanceStatus={instance.status} />
             )}
           </div>

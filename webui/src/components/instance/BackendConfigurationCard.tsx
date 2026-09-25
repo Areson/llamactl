@@ -41,7 +41,8 @@ const BackendConfigurationCard: React.FC<BackendConfigurationCardProps> = ({
           options={[
             { value: BackendType.LLAMA_CPP, label: 'Llama Server' },
             { value: BackendType.MLX_LM, label: 'MLX LM' },
-            { value: BackendType.VLLM, label: 'vLLM' }
+            { value: BackendType.VLLM, label: 'vLLM' },
+            { value: BackendType.TABBY_API, label: 'TabbyAPI' }
           ]}
           description="Select the backend server type"
         />

@@ -30,6 +30,8 @@ const ExecutionContextSection: React.FC<ExecutionContextSectionProps> = ({
         return "vllm"
       case BackendType.MLX_LM:
         return "mlx_lm.server"
+      case BackendType.TABBY_API:
+        return "python"
       default:
         return ""
     }
@@ -40,7 +42,7 @@ const ExecutionContextSection: React.FC<ExecutionContextSectionProps> = ({
       <h3 className="text-md font-medium">Execution Context</h3>
 
       {/* Docker Mode Toggle - only for backends that support Docker */}
-      {formData.backend_type !== BackendType.MLX_LM && (
+      {formData.backend_type !== BackendType.MLX_LM && formData.backend_type !== BackendType.TABBY_API && (
         <CheckboxInput
           id="docker_enabled"
           label="Enable Docker"
@@ -51,7 +53,7 @@ const ExecutionContextSection: React.FC<ExecutionContextSectionProps> = ({
       )}
 
       {/* Command Override - only shown when Docker is disabled or backend is MLX */}
-      {(formData.backend_type === BackendType.MLX_LM || formData.docker_enabled !== true) && (
+      {(formData.backend_type === BackendType.MLX_LM || formData.backend_type === BackendType.TABBY_API || formData.docker_enabled !== true) && (
         <TextInput
           id="command_override"
           label="Command Override"
