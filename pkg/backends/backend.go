@@ -3,6 +3,7 @@ package backends
 import (
 	"encoding/json"
 	"fmt"
+	"llamactl/pkg/backends/tabby"
 	"llamactl/pkg/config"
 	"llamactl/pkg/validation"
 	"maps"
@@ -246,6 +247,12 @@ func (o *Options) BuildEnvironment(backendConfig *config.BackendConfig, dockerEn
 
 	if environment != nil {
 		maps.Copy(env, environment)
+	}
+
+	// TabbyAPI: inject in-process GET /slots shim via PYTHONPATH/sitecustomize
+	// so Tabby's install tree can stay stock (bare disk). No-op for other backends.
+	if o.BackendType == BackendTypeTabbyAPI {
+		tabby.InjectPythonPath(env)
 	}
 
 	return env

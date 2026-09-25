@@ -4,6 +4,9 @@ import (
 	"llamactl/pkg/backends"
 	"llamactl/pkg/config"
 	"llamactl/pkg/testutil"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -316,5 +319,49 @@ func TestTabbyGetCommand_NoDocker(t *testing.T) {
 				t.Errorf("GetCommand() = %v, want %v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestTabbyBuildEnvironment_InjectsSlotsShim(t *testing.T) {
+	backendConfig := &config.BackendConfig{
+		Tabby: config.BackendSettings{
+			Command: "python",
+			Args:    []string{"main.py"},
+			Environment: map[string]string{
+				"TABBYAPI_LLAMACTL_TIMING": "1",
+			},
+		},
+		LlamaCpp: config.BackendSettings{
+			Command: "llama-server",
+			Environment: map[string]string{
+				"LLAMA_ARG": "1",
+			},
+		},
+	}
+
+	tabbyOpts := backends.Options{
+		BackendType:        backends.BackendTypeTabbyAPI,
+		TabbyServerOptions: &backends.TabbyServerOptions{Port: 8109},
+	}
+	env := tabbyOpts.BuildEnvironment(backendConfig, nil, nil)
+	if env["TABBYAPI_LLAMACTL_TIMING"] != "1" {
+		t.Fatalf("expected timing env preserved, got %q", env["TABBYAPI_LLAMACTL_TIMING"])
+	}
+	pp := env["PYTHONPATH"]
+	if pp == "" {
+		t.Fatal("expected PYTHONPATH for tabby_api")
+	}
+	first := strings.Split(pp, string(os.PathListSeparator))[0]
+	if _, err := os.Stat(filepath.Join(first, "sitecustomize.py")); err != nil {
+		t.Fatalf("sitecustomize.py missing on PYTHONPATH %q: %v", pp, err)
+	}
+
+	llamaOpts := backends.Options{
+		BackendType:        backends.BackendTypeLlamaCpp,
+		LlamaServerOptions: &backends.LlamaServerOptions{Port: 8080},
+	}
+	llamaEnv := llamaOpts.BuildEnvironment(backendConfig, nil, nil)
+	if _, ok := llamaEnv["PYTHONPATH"]; ok {
+		t.Fatalf("llama_cpp must not get tabby PYTHONPATH shim, got %q", llamaEnv["PYTHONPATH"])
 	}
 }
