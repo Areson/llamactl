@@ -16,6 +16,8 @@ func getBackendSettings(bc *config.BackendConfig, backendType string) config.Bac
 		return bc.VLLM
 	case "mlx":
 		return bc.MLX
+	case "tabby":
+		return bc.Tabby
 	default:
 		return config.BackendSettings{}
 	}
@@ -64,6 +66,19 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 	if cfg.Instances.DefaultRestartDelay != 5 {
 		t.Errorf("Expected default restart delay 5, got %d", cfg.Instances.DefaultRestartDelay)
+	}
+	if cfg.Backends.Tabby.Command != "python" {
+		t.Errorf("Expected default Tabby command 'python', got %q", cfg.Backends.Tabby.Command)
+	}
+	if len(cfg.Backends.Tabby.Args) != 1 || cfg.Backends.Tabby.Args[0] != "main.py" {
+		t.Errorf("Expected default Tabby args ['main.py'], got %v", cfg.Backends.Tabby.Args)
+	}
+	if cfg.Backends.Tabby.Environment["TABBYAPI_LLAMACTL_TIMING"] != "1" {
+		t.Errorf("Expected TABBYAPI_LLAMACTL_TIMING=1 in Tabby default env, got %q",
+			cfg.Backends.Tabby.Environment["TABBYAPI_LLAMACTL_TIMING"])
+	}
+	if cfg.Backends.Tabby.Docker != nil {
+		t.Error("Expected Tabby Docker to be nil (unsupported)")
 	}
 }
 
@@ -271,6 +286,10 @@ func TestGetBackendSettings_NewStructuredConfig(t *testing.T) {
 			Command: "custom-mlx",
 			Args:    []string{},
 		},
+		Tabby: config.BackendSettings{
+			Command: "custom-tabby-python",
+			Args:    []string{"main.py"},
+		},
 	}
 
 	// Test llama-cpp with Docker
@@ -305,6 +324,12 @@ func TestGetBackendSettings_NewStructuredConfig(t *testing.T) {
 	if settings.Command != "custom-mlx" {
 		t.Errorf("Expected command 'custom-mlx', got %q", settings.Command)
 	}
+
+	// Test Tabby
+	settings = getBackendSettings(bc, "tabby")
+	if settings.Command != "custom-tabby-python" {
+		t.Errorf("Expected command 'custom-tabby-python', got %q", settings.Command)
+	}
 }
 
 func TestLoadConfig_BackendEnvironmentVariables(t *testing.T) {
@@ -321,6 +346,9 @@ func TestLoadConfig_BackendEnvironmentVariables(t *testing.T) {
 		"LLAMACTL_VLLM_DOCKER_IMAGE":       "env-vllm:latest",
 		"LLAMACTL_VLLM_DOCKER_ENV":         "PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512,CUDA_VISIBLE_DEVICES=1",
 		"LLAMACTL_MLX_COMMAND":             "env-mlx",
+		"LLAMACTL_TABBY_COMMAND":           "env-tabby-python",
+		"LLAMACTL_TABBY_ARGS":              "main.py --debug",
+		"LLAMACTL_TABBY_ENV":               "TABBYAPI_LLAMACTL_TIMING=1,CUDA_VISIBLE_DEVICES=0",
 	}
 
 	// Set env vars and ensure cleanup
@@ -373,6 +401,23 @@ func TestLoadConfig_BackendEnvironmentVariables(t *testing.T) {
 	// Verify MLX environment overrides
 	if cfg.Backends.MLX.Command != "env-mlx" {
 		t.Errorf("Expected MLX command 'env-mlx', got %q", cfg.Backends.MLX.Command)
+	}
+
+	// Verify Tabby environment overrides
+	if cfg.Backends.Tabby.Command != "env-tabby-python" {
+		t.Errorf("Expected Tabby command 'env-tabby-python', got %q", cfg.Backends.Tabby.Command)
+	}
+	expectedTabbyArgs := []string{"main.py", "--debug"}
+	if len(cfg.Backends.Tabby.Args) != len(expectedTabbyArgs) {
+		t.Errorf("Expected Tabby args %v, got %v", expectedTabbyArgs, cfg.Backends.Tabby.Args)
+	}
+	if cfg.Backends.Tabby.Environment["TABBYAPI_LLAMACTL_TIMING"] != "1" {
+		t.Errorf("Expected TABBYAPI_LLAMACTL_TIMING=1, got %q",
+			cfg.Backends.Tabby.Environment["TABBYAPI_LLAMACTL_TIMING"])
+	}
+	if cfg.Backends.Tabby.Environment["CUDA_VISIBLE_DEVICES"] != "0" {
+		t.Errorf("Expected CUDA_VISIBLE_DEVICES=0, got %q",
+			cfg.Backends.Tabby.Environment["CUDA_VISIBLE_DEVICES"])
 	}
 }
 

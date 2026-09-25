@@ -26,6 +26,7 @@ type BackendConfig struct {
 	LlamaCpp BackendSettings `yaml:"llama-cpp" json:"llama-cpp"`
 	VLLM     BackendSettings `yaml:"vllm" json:"vllm"`
 	MLX      BackendSettings `yaml:"mlx" json:"mlx"`
+	Tabby    BackendSettings `yaml:"tabby" json:"tabby"`
 }
 
 // AppConfig represents the configuration for llamactl

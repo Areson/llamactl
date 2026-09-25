@@ -255,6 +255,35 @@ func (h *Handler) ParseVllmCommand() http.HandlerFunc {
 	}
 }
 
+// ParseTabbyCommand godoc
+// @Summary Parse TabbyAPI command
+// @Description Parses a TabbyAPI (python main.py) command string into instance options
+// @Tags Backends
+// @Security ApiKeyAuth
+// @Accept json
+// @Produce json
+// @Param request body ParseCommandRequest true "Command to parse"
+// @Success 200 {object} instance.Options "Parsed options"
+// @Failure 400 {object} map[string]string "Invalid request or command"
+// @Router /api/v1/backends/tabby/parse-command [post]
+func (h *Handler) ParseTabbyCommand() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		parsedOptions, ok := parseHelper(w, r, &backends.TabbyServerOptions{})
+		if !ok {
+			return
+		}
+
+		options := &instance.Options{
+			BackendOptions: backends.Options{
+				BackendType:        backends.BackendTypeTabbyAPI,
+				TabbyServerOptions: parsedOptions.(*backends.TabbyServerOptions),
+			},
+		}
+
+		writeJSON(w, http.StatusOK, options)
+	}
+}
+
 // executeLlamaServerCommand executes a llama-server command with the specified flag and returns the output
 func (h *Handler) executeLlamaServerCommand(flag, errorMsg string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

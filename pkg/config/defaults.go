@@ -53,6 +53,19 @@ func getDefaultConfig(dataDir string) AppConfig {
 				Args:    []string{},
 				// No Docker section for MLX - not supported
 			},
+			Tabby: BackendSettings{
+				// TabbyAPI entrypoint is `python main.py` from the install root.
+				// Override Command (and optionally Args) via config / LLAMACTL_TABBY_*
+				// to point at your venv python and absolute main.py path.
+				Command: "python",
+				Args:    []string{"main.py"},
+				Environment: map[string]string{
+					// Enables tabbyAPI.common.gen_logging._emit_llamactl_timing so
+					// model-throughput cards receive print_timing lines.
+					"TABBYAPI_LLAMACTL_TIMING": "1",
+				},
+				// No Docker section for TabbyAPI - not supported (follow MLX)
+			},
 		},
 		Instances: InstancesConfig{
 			PortRange:            [2]int{8000, 9000},

@@ -195,6 +195,26 @@ func loadEnvVars(cfg *AppConfig) {
 		parseHeaders(llamaEnv, cfg.Backends.MLX.ResponseHeaders)
 	}
 
+	// TabbyAPI backend
+	if tabbyCmd := os.Getenv("LLAMACTL_TABBY_COMMAND"); tabbyCmd != "" {
+		cfg.Backends.Tabby.Command = tabbyCmd
+	}
+	if tabbyArgs := os.Getenv("LLAMACTL_TABBY_ARGS"); tabbyArgs != "" {
+		cfg.Backends.Tabby.Args = strings.Split(tabbyArgs, " ")
+	}
+	if tabbyEnv := os.Getenv("LLAMACTL_TABBY_ENV"); tabbyEnv != "" {
+		if cfg.Backends.Tabby.Environment == nil {
+			cfg.Backends.Tabby.Environment = make(map[string]string)
+		}
+		parseEnvVars(tabbyEnv, cfg.Backends.Tabby.Environment)
+	}
+	if tabbyHeaders := os.Getenv("LLAMACTL_TABBY_RESPONSE_HEADERS"); tabbyHeaders != "" {
+		if cfg.Backends.Tabby.ResponseHeaders == nil {
+			cfg.Backends.Tabby.ResponseHeaders = make(map[string]string)
+		}
+		parseHeaders(tabbyHeaders, cfg.Backends.Tabby.ResponseHeaders)
+	}
+
 	// Instance defaults
 	if idleTimeout := os.Getenv("LLAMACTL_DEFAULT_IDLE_TIMEOUT"); idleTimeout != "" {
 		if minutes, err := strconv.Atoi(idleTimeout); err == nil {

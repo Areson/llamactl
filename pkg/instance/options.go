@@ -227,10 +227,12 @@ func (c *Options) validateAndApplyDefaults(name string, globalSettings *config.I
 		c.CommandOverride = "" // Clear invalid configuration
 	}
 
-	// Validate docker_enabled for MLX backend
-	if c.BackendOptions.BackendType == backends.BackendTypeMlxLm {
+	// Validate docker_enabled for MLX / TabbyAPI backends
+	if c.BackendOptions.BackendType == backends.BackendTypeMlxLm ||
+		c.BackendOptions.BackendType == backends.BackendTypeTabbyAPI {
 		if c.DockerEnabled != nil && *c.DockerEnabled {
-			log.Printf("Instance %s: docker_enabled is not supported for MLX backend, ignoring", name)
+			log.Printf("Instance %s: docker_enabled is not supported for %s backend, ignoring",
+				name, c.BackendOptions.BackendType)
 			c.DockerEnabled = nil // Clear invalid configuration
 		}
 	}

@@ -14,6 +14,7 @@ const (
 	BackendTypeLlamaCpp BackendType = "llama_cpp"
 	BackendTypeMlxLm    BackendType = "mlx_lm"
 	BackendTypeVllm     BackendType = "vllm"
+	BackendTypeTabbyAPI BackendType = "tabby_api"
 	BackendTypeUnknown  BackendType = "unknown"
 )
 
@@ -32,6 +33,7 @@ var backendConstructors = map[BackendType]func() backend{
 	BackendTypeLlamaCpp: func() backend { return &LlamaServerOptions{} },
 	BackendTypeMlxLm:    func() backend { return &MlxServerOptions{} },
 	BackendTypeVllm:     func() backend { return &VllmServerOptions{} },
+	BackendTypeTabbyAPI: func() backend { return &TabbyServerOptions{} },
 }
 
 type Options struct {
@@ -42,6 +44,7 @@ type Options struct {
 	LlamaServerOptions *LlamaServerOptions `json:"-"`
 	MlxServerOptions   *MlxServerOptions   `json:"-"`
 	VllmServerOptions  *VllmServerOptions  `json:"-"`
+	TabbyServerOptions *TabbyServerOptions `json:"-"`
 }
 
 func (o *Options) UnmarshalJSON(data []byte) error {
@@ -117,6 +120,8 @@ func (o *Options) setBackendOptions(bcknd backend) {
 		o.MlxServerOptions = v
 	case *VllmServerOptions:
 		o.VllmServerOptions = v
+	case *TabbyServerOptions:
+		o.TabbyServerOptions = v
 	}
 }
 
@@ -128,6 +133,8 @@ func (o *Options) getBackendSettings(backendConfig *config.BackendConfig) *confi
 		return &backendConfig.MLX
 	case BackendTypeVllm:
 		return &backendConfig.VLLM
+	case BackendTypeTabbyAPI:
+		return &backendConfig.Tabby
 	default:
 		return nil
 	}
@@ -142,6 +149,8 @@ func (o *Options) getBackend() backend {
 		return o.MlxServerOptions
 	case BackendTypeVllm:
 		return o.VllmServerOptions
+	case BackendTypeTabbyAPI:
+		return o.TabbyServerOptions
 	default:
 		return nil
 	}
@@ -154,8 +163,8 @@ func (o *Options) isDockerEnabled(backend *config.BackendSettings, dockerEnabled
 		return false
 	}
 
-	// MLX doesn't support Docker
-	if o.BackendType == BackendTypeMlxLm {
+	// MLX and TabbyAPI don't support Docker
+	if o.BackendType == BackendTypeMlxLm || o.BackendType == BackendTypeTabbyAPI {
 		return false
 	}
 
