@@ -176,3 +176,23 @@ func TestParseLiveSlot0Lines(t *testing.T) {
 		t.Fatalf("gen %+v", r)
 	}
 }
+
+func TestRecordFromUsageExcludesCachedPrompt(t *testing.T) {
+	u := &OpenAIUsage{
+		PromptTokens:           1000,
+		CachedTokens:           900,
+		PromptTimeSec:          0.1,
+		PromptTokensPerSec:     1000,
+		CompletionTokens:       10,
+		CompletionTimeSec:      0.2,
+		CompletionTokensPerSec: 50,
+	}
+	rec := RecordFromUsage(u, time.UnixMilli(1).UTC())
+	if rec == nil {
+		t.Fatal("nil")
+	}
+	if rec.PromptTokens != 100 {
+		t.Fatalf("PromptTokens=%d want 100 (processed, not cached)", rec.PromptTokens)
+	}
+}
+

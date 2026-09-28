@@ -14,6 +14,7 @@ import (
 // those but may still send token counts.
 type OpenAIUsage struct {
 	PromptTokens           int
+	CachedTokens           int // from prompt_tokens_details.cached_tokens when present
 	CompletionTokens       int
 	PromptTimeSec          float64
 	CompletionTimeSec      float64
@@ -37,8 +38,16 @@ func ParseOpenAIUsage(data []byte) *OpenAIUsage {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil
 	}
+	cached := 0
+	if rawDetails, ok := fields["prompt_tokens_details"]; ok && len(rawDetails) > 0 && string(rawDetails) != "null" {
+		var details map[string]json.RawMessage
+		if err := json.Unmarshal(rawDetails, &details); err == nil {
+			cached = jsonInt(details["cached_tokens"])
+		}
+	}
 	u := &OpenAIUsage{
 		PromptTokens:           jsonInt(fields["prompt_tokens"]),
+		CachedTokens:           cached,
 		CompletionTokens:       jsonInt(fields["completion_tokens"]),
 		PromptTimeSec:          jsonFloat(fields["prompt_time"]),
 		CompletionTimeSec:      jsonFloat(fields["completion_time"]),
@@ -93,7 +102,12 @@ func RecordFromUsage(u *OpenAIUsage, at time.Time) *ThroughputRecord {
 		GenPerSec:   round2(genPerSec),
 	}
 
-	promptTokens := u.PromptTokens
+	// Match llama.cpp / Tabby print_timing: prompt line counts tokens that
+	// actually ran through prefill (exclude cache hits).
+	promptTokens := u.PromptTokens - u.CachedTokens
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
 	promptPerSec := u.PromptTokensPerSec
 	promptTimeMs := u.PromptTimeSec * 1000
 	if promptPerSec <= 0 && promptTimeMs > 0 && promptTokens > 0 {
