@@ -16,9 +16,9 @@ import (
 )
 
 // GetInstanceStats returns per-request throughput history parsed from the
-// instance's llama.cpp log, plus rolling aggregates over the decode (gen)
-// throughput. This is the source for the model-throughput card widget and for
-// long-term model speed / configuration evaluation.
+// instance log (llama.cpp / Tabby print_timing lines, including synthetic
+// lines recorded from proxied OpenAI usage), plus rolling aggregates over
+// decode (gen) throughput. Source for the model-throughput card / iCUE widget.
 //
 // @Summary Get instance throughput stats
 // @Description Parses llama.cpp per-request timing lines (prompt eval + decode) from the instance log and returns the most recent generations plus aggregates.

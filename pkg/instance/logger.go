@@ -141,6 +141,24 @@ func (l *logger) attachTail(offset int64) error {
 	return nil
 }
 
+// appendLines writes arbitrary lines to the instance log (e.g. synthetic
+// print_timing rows derived from proxied OpenAI usage). Safe no-op when the
+// log file is not open yet.
+func (l *logger) appendLines(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	lg := l.logFile
+	if lg == nil {
+		return
+	}
+	for _, line := range lines {
+		fmt.Fprintln(lg, line)
+	}
+}
+
 // path returns the absolute path to the instance's log file, or "" if logging
 // is not configured. Intended for read-only consumers (e.g. the throughput
 // stats parser) that need to read the file directly.

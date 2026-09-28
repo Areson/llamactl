@@ -136,6 +136,11 @@ func (p *proxy) build() (*httputil.ReverseProxy, error) {
 		if IdleCountsPath(req.URL.Path) {
 			p.updateLastRequestTime()
 		}
+
+		// TabbyAPI only returns timed usage when include_usage is set; inject
+		// it on completion requests so /stats can record t/s without the
+		// TABBYAPI_LLAMACTL_TIMING print_timing scrape.
+		p.injectIncludeUsageForTabby(req)
 	}
 
 	if !p.instance.IsRemote() {
@@ -153,6 +158,11 @@ func (p *proxy) build() (*httputil.ReverseProxy, error) {
 			for key, value := range p.responseHeaders {
 				resp.Header.Set(key, value)
 			}
+
+			// Observe OpenAI-compatible usage on completion responses and
+			// append print_timing lines for /stats (TabbyAPI + any backend
+			// that returns timed usage).
+			p.maybeCaptureUsage(resp)
 			return nil
 		}
 	}

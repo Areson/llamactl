@@ -60,8 +60,10 @@ func getDefaultConfig(dataDir string) AppConfig {
 				Command: "python",
 				Args:    []string{"main.py"},
 				Environment: map[string]string{
-					// Enables tabbyAPI.common.gen_logging._emit_llamactl_timing so
-					// model-throughput cards receive print_timing lines.
+					// Optional fallback: Tabby stdout print_timing scrape for
+					// /stats. Prefer proxy-observed OpenAI usage (see
+					// pkg/instance/proxy_usage.go); this env can be removed once
+					// all traffic goes through the llamactl proxy.
 					"TABBYAPI_LLAMACTL_TIMING": "1",
 				},
 				// No Docker section for TabbyAPI - not supported (follow MLX)
