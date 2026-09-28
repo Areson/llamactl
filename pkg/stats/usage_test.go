@@ -158,3 +158,21 @@ func TestFormatPrintTimingDecodeOnly(t *testing.T) {
 		t.Fatalf("parsed %+v", parsed)
 	}
 }
+
+func TestParseLiveSlot0Lines(t *testing.T) {
+	lines := []string{
+		"print_timing: id 0 | task 1790635805710 | prompt eval time = 120.00 ms / 57 tokens (2.11 ms per token, 475.00 tokens per second)",
+		"print_timing: id 0 | task 1790635805710 | eval time = 80.00 ms / 12 tokens (6.67 ms per token, 142.05 tokens per second)",
+	}
+	recs := Parse(lines)
+	if len(recs) != 1 {
+		t.Fatalf("got %d: %+v", len(recs), recs)
+	}
+	r := recs[0]
+	if r.PromptTokens != 57 {
+		t.Fatalf("PromptTokens=%d want 57; full=%+v", r.PromptTokens, r)
+	}
+	if r.GenTokens != 12 || math.Abs(r.GenPerSec-142.05) > 0.01 {
+		t.Fatalf("gen %+v", r)
+	}
+}

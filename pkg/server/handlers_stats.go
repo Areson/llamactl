@@ -150,9 +150,11 @@ func readThroughputRecords(logPath string, limit int) ([]stats.ThroughputRecord,
 				// Compact the slice (order is small; a simple copy suffices).
 				order = append(order[:0], order[1:]...)
 			}
-		} else {
-			st.Apply(rec)
 		}
+		// Always Apply: Tabby / proxy-derived pairs start with the prompt
+		// line (no prior n_gen print_timing), so skipping Apply on the
+		// first sighting dropped prompt tokens from /stats.
+		st.Apply(rec)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, err
