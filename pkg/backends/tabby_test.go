@@ -365,3 +365,83 @@ func TestTabbyBuildEnvironment_InjectsSlotsShim(t *testing.T) {
 		t.Fatalf("llama_cpp must not get tabby PYTHONPATH shim, got %q", llamaEnv["PYTHONPATH"])
 	}
 }
+
+func TestTabbyWorkingDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   string
+		args     []string
+		want     string
+		wantEmpty bool
+	}{
+		{
+			name:   "absolute config wins",
+			config: `E:\Model Cache\tabbyapi\tabbyAPI\config.yml`,
+			args:   []string{`E:\Model Cache\tabbyapi\tabbyAPI\main.py`, "--host", "127.0.0.1"},
+			want:   filepath.Clean(`E:\Model Cache\tabbyapi\tabbyAPI`),
+		},
+		{
+			name:   "config preferred over main.py in different dir",
+			config: `E:\tabby\install\config.yml`,
+			args:   []string{`D:\other\main.py`},
+			want:   filepath.Clean(`E:\tabby\install`),
+		},
+		{
+			name:   "absolute main.py when no config",
+			config: "",
+			args:   []string{`E:/Model Cache/tabbyapi/tabbyAPI/main.py`, "--port", "8116"},
+			want:   filepath.Clean(`E:/Model Cache/tabbyapi/tabbyAPI`),
+		},
+		{
+			name:   "absolute start.py when no config",
+			config: "",
+			args:   []string{"--host", "0.0.0.0", `D:\opt\tabbyAPI\start.py`},
+			want:   filepath.Clean(`D:\opt\tabbyAPI`),
+		},
+		{
+			name:      "relative config ignored, falls through to main.py",
+			config:    "config.yml",
+			args:      []string{`E:\tabby\main.py`},
+			want:      filepath.Clean(`E:\tabby`),
+		},
+		{
+			name:      "relative main.py alone yields empty",
+			config:    "",
+			args:      []string{"main.py", "--port", "8080"},
+			wantEmpty: true,
+		},
+		{
+			name:      "no config no main.py yields empty",
+			config:    "",
+			args:      []string{"--host", "127.0.0.1"},
+			wantEmpty: true,
+		},
+		{
+			name:      "empty inputs",
+			config:    "",
+			args:      nil,
+			wantEmpty: true,
+		},
+		{
+			name:      "relative config only yields empty",
+			config:    "config.yml",
+			args:      nil,
+			wantEmpty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := backends.TabbyWorkingDir(tt.config, tt.args)
+			if tt.wantEmpty {
+				if got != "" {
+					t.Fatalf("TabbyWorkingDir() = %q, want empty", got)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("TabbyWorkingDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -570,6 +570,12 @@ func (p *process) buildCommand() (*exec.Cmd, error) {
 	// Create the exec.Cmd
 	cmd := exec.CommandContext(p.ctx, command, args...)
 
+	// TabbyAPI (and any backend that returns a working dir) needs cwd at the
+	// install root so relative assets like sampler_overrides/ resolve correctly.
+	if dir := p.instance.workingDir(args); dir != "" {
+		cmd.Dir = dir
+	}
+
 	// Start with host environment variables
 	cmd.Env = os.Environ()
 

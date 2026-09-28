@@ -427,6 +427,24 @@ func (i *Instance) buildEnvironment() map[string]string {
 	return opts.BackendOptions.BuildEnvironment(i.globalBackendSettings, opts.DockerEnabled, opts.Environment)
 }
 
+// workingDir returns the OS process working directory for backends that need
+// one (currently TabbyAPI). Empty means leave cmd.Dir unset (default: inherit
+// llamactl's CWD).
+func (i *Instance) workingDir(args []string) string {
+	opts := i.GetOptions()
+	if opts == nil {
+		return ""
+	}
+	if opts.BackendOptions.BackendType != backends.BackendTypeTabbyAPI {
+		return ""
+	}
+	configPath := ""
+	if opts.BackendOptions.TabbyServerOptions != nil {
+		configPath = opts.BackendOptions.TabbyServerOptions.Config
+	}
+	return backends.TabbyWorkingDir(configPath, args)
+}
+
 // MarshalJSON implements json.Marshaler for Instance
 func (i *Instance) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {

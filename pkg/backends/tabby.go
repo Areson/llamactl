@@ -3,6 +3,7 @@ package backends
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"llamactl/pkg/validation"
 )
 
@@ -119,4 +120,35 @@ func (o *TabbyServerOptions) ParseCommand(command string) (any, error) {
 	}
 
 	return &tabbyOptions, nil
+}
+
+// TabbyWorkingDir returns the process working directory for a TabbyAPI spawn so
+// relative assets (sampler_overrides/, default config.yml) resolve against the
+// install root rather than llamactl's CWD.
+//
+// Derivation order:
+//  1. If config is an absolute path, use its directory.
+//  2. Else if args contain an absolute path whose base is main.py or start.py,
+//     use that file's directory.
+//  3. Else return "" (leave cmd.Dir unset).
+func TabbyWorkingDir(config string, args []string) string {
+	if dir := absFileDir(config); dir != "" {
+		return dir
+	}
+	for _, a := range args {
+		base := filepath.Base(a)
+		if base == "main.py" || base == "start.py" {
+			if dir := absFileDir(a); dir != "" {
+				return dir
+			}
+		}
+	}
+	return ""
+}
+
+func absFileDir(path string) string {
+	if path == "" || !filepath.IsAbs(path) {
+		return ""
+	}
+	return filepath.Clean(filepath.Dir(path))
 }
