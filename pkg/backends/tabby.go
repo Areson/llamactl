@@ -3,8 +3,13 @@ package backends
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
+
 	"llamactl/pkg/validation"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TabbyServerOptions are the thin, first-class options for the TabbyAPI backend.
@@ -24,6 +29,11 @@ type TabbyServerOptions struct {
 	// Config is an optional path to an overriding config.yml (--config).
 	// Tabby still loads CWD-relative config.yml unless this is set; prefer an
 	// absolute path when the process cwd is not the Tabby install root.
+	//
+	// NOTE: Tabby's common/tabby_config.py _from_args returns early when
+	// --config is set, so CLI --port is ignored and the YAML network.port
+	// wins. BuildCommandArgs compensates (see TabbyOmitConfigForPort /
+	// WriteTabbyConfigWithPort) so GetPort() always matches the bind port.
 	Config string `json:"config,omitempty"`
 
 	// ExtraArgs are additional command line arguments.
@@ -89,11 +99,89 @@ func (o *TabbyServerOptions) Validate() error {
 	return nil
 }
 
-// BuildCommandArgs converts to command line arguments
+// TabbyOmitConfigForPort reports whether BuildCommandArgs should drop --config
+// so CLI --port is honored. Tabby ignores CLI --port when --config is set
+// (_from_args early return). When the override file is named config.yml and
+// TabbyWorkingDir has set cwd to that file's directory, Tabby still loads the
+// same YAML from CWD; omitting --config lets --port win the merge.
+func TabbyOmitConfigForPort(config string, port int) bool {
+	if port <= 0 || config == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Base(config), "config.yml")
+}
+
+// WriteTabbyConfigWithPort reads srcConfig, deep-sets network.port, and writes
+// a temp YAML. Used when Config is a non-config.yml path so --config must stay
+// on the CLI (early return would otherwise discard --port). The returned path
+// is the temp file; callers may leave it for process lifetime (OS temp cleanup).
+func WriteTabbyConfigWithPort(srcConfig string, port int) (string, error) {
+	data, err := os.ReadFile(srcConfig)
+	if err != nil {
+		return "", fmt.Errorf("read tabby config %q: %w", srcConfig, err)
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return "", fmt.Errorf("parse tabby config %q: %w", srcConfig, err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+
+	network, _ := doc["network"].(map[string]any)
+	if network == nil {
+		network = map[string]any{}
+		doc["network"] = network
+	}
+	network["port"] = port
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("marshal tabby config with port: %w", err)
+	}
+
+	f, err := os.CreateTemp("", "llamactl-tabby-config-*.yml")
+	if err != nil {
+		return "", fmt.Errorf("create temp tabby config: %w", err)
+	}
+	path := f.Name()
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("write temp tabby config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("close temp tabby config: %w", err)
+	}
+	return path, nil
+}
+
+// BuildCommandArgs converts to command line arguments.
+//
+// Tabby _from_args returns early when --config is set, discarding CLI --port
+// so config.yml network.port wins and GetPort() disagrees with the bind port.
+// When both Config and Port are set we either omit --config (config.yml + cwd)
+// or rewrite Config to a temp YAML with network.port overridden.
 func (o *TabbyServerOptions) BuildCommandArgs() []string {
 	multipleFlags := map[string]struct{}{}
-	args := BuildCommandArgs(o, multipleFlags)
-	args = append(args, convertExtraArgsToFlags(o.ExtraArgs)...)
+
+	// Shallow copy so we can adjust Config for the arg list without mutating
+	// the stored options (instance JSON / GetPort must keep the real values).
+	cp := *o
+	if cp.Port > 0 && cp.Config != "" {
+		if TabbyOmitConfigForPort(cp.Config, cp.Port) {
+			cp.Config = ""
+		} else if path, err := WriteTabbyConfigWithPort(cp.Config, cp.Port); err == nil {
+			cp.Config = path
+		}
+		// On WriteTabbyConfigWithPort error, keep original --config (degraded:
+		// port may mismatch). Spawn still works; health will surface the miss.
+	}
+
+	args := BuildCommandArgs(&cp, multipleFlags)
+	args = append(args, convertExtraArgsToFlags(cp.ExtraArgs)...)
 	return args
 }
 

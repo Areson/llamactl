@@ -6,8 +6,11 @@ import (
 	"llamactl/pkg/testutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestParseTabbyCommand(t *testing.T) {
@@ -179,18 +182,184 @@ func TestTabbyBuildCommandArgs_Fields(t *testing.T) {
 
 	args := options.BuildCommandArgs()
 
+	// Port + config.yml: --config is omitted so CLI --port is honored
+	// (Tabby _from_args early-returns on --config and drops --port).
 	expected := []string{
 		"--host", "127.0.0.1",
 		"--port", "8109",
 		"--model-name", "my-model",
 		"--model-dir", `E:\models`,
-		"--config", `E:\tabby\config.yml`,
 	}
 
 	for _, expectedArg := range expected {
 		if !testutil.Contains(args, expectedArg) {
 			t.Errorf("Expected argument %q not found in %v", expectedArg, args)
 		}
+	}
+	if testutil.Contains(args, "--config") {
+		t.Errorf("--config must be omitted when Config basename is config.yml and Port is set; got %v", args)
+	}
+	// Stored options must not be mutated.
+	if options.Config != `E:\tabby\config.yml` {
+		t.Errorf("BuildCommandArgs mutated Config: got %q", options.Config)
+	}
+}
+
+func TestTabbyOmitConfigForPort(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		port   int
+		want   bool
+	}{
+		{name: "config.yml with port", config: `E:\tabby\config.yml`, port: 8116, want: true},
+		{name: "CONFIG.YML case insensitive", config: `E:\tabby\CONFIG.YML`, port: 8116, want: true},
+		{name: "custom name keeps config", config: `E:\tabby\custom.yml`, port: 8116, want: false},
+		{name: "no port", config: `E:\tabby\config.yml`, port: 0, want: false},
+		{name: "empty config", config: "", port: 8116, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := backends.TabbyOmitConfigForPort(tt.config, tt.port)
+			if got != tt.want {
+				t.Fatalf("TabbyOmitConfigForPort(%q, %d) = %v, want %v", tt.config, tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTabbyBuildCommandArgs_OmitsConfigYmlWhenPortSet(t *testing.T) {
+	opts := backends.TabbyServerOptions{
+		Port:   8116,
+		Config: `E:\Model Cache\tabbyapi\tabbyAPI\config.yml`,
+		Host:   "127.0.0.1",
+	}
+	args := opts.BuildCommandArgs()
+
+	if !testutil.Contains(args, "--port") || !testutil.Contains(args, "8116") {
+		t.Fatalf("expected --port 8116 in %v", args)
+	}
+	if testutil.Contains(args, "--config") {
+		t.Fatalf("expected --config omitted for config.yml + port, got %v", args)
+	}
+	if opts.Config == "" || opts.Port != 8116 {
+		t.Fatalf("options mutated: config=%q port=%d", opts.Config, opts.Port)
+	}
+}
+
+func TestTabbyBuildCommandArgs_CustomConfigRewritesPort(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "custom-config.yml")
+	srcYAML := []byte("network:\n  host: 127.0.0.1\n  port: 8109\nmodel:\n  model_name: demo\n")
+	if err := os.WriteFile(src, srcYAML, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := backends.TabbyServerOptions{
+		Port:   8116,
+		Config: src,
+		Host:   "127.0.0.1",
+	}
+	args := opts.BuildCommandArgs()
+
+	// Must still pass --config (custom name), but pointing at a temp file
+	// whose network.port is 8116 — not the original 8109.
+	cfgIdx := -1
+	for i, a := range args {
+		if a == "--config" && i+1 < len(args) {
+			cfgIdx = i + 1
+			break
+		}
+	}
+	if cfgIdx < 0 {
+		t.Fatalf("expected --config <temp> in %v", args)
+	}
+	tempPath := args[cfgIdx]
+	if tempPath == src {
+		t.Fatalf("--config still points at source %q; expected temp rewrite", src)
+	}
+	if !testutil.Contains(args, "--port") || !testutil.Contains(args, "8116") {
+		t.Fatalf("expected --port 8116 still present in %v", args)
+	}
+
+	data, err := os.ReadFile(tempPath)
+	if err != nil {
+		t.Fatalf("read temp config: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse temp config: %v", err)
+	}
+	network, _ := doc["network"].(map[string]any)
+	if network == nil {
+		t.Fatalf("temp config missing network: %s", data)
+	}
+	portVal := network["port"]
+	switch p := portVal.(type) {
+	case int:
+		if p != 8116 {
+			t.Fatalf("temp network.port = %d, want 8116", p)
+		}
+	case int64:
+		if p != 8116 {
+			t.Fatalf("temp network.port = %d, want 8116", p)
+		}
+	default:
+		// yaml.v3 may decode as int or float64 depending on content
+		if fmt := stringifyPort(portVal); fmt != "8116" {
+			t.Fatalf("temp network.port = %v (%T), want 8116", portVal, portVal)
+		}
+	}
+	if name, _ := doc["model"].(map[string]any)["model_name"].(string); name != "demo" {
+		t.Fatalf("temp config lost model_name: %v", doc["model"])
+	}
+	// Original file unchanged; stored options unchanged.
+	orig, _ := os.ReadFile(src)
+	if string(orig) != string(srcYAML) {
+		t.Fatal("source config was modified")
+	}
+	if opts.Config != src {
+		t.Fatalf("options.Config mutated to %q", opts.Config)
+	}
+	_ = os.Remove(tempPath)
+}
+
+func stringifyPort(v any) string {
+	switch p := v.(type) {
+	case int:
+		return strconv.Itoa(p)
+	case int64:
+		return strconv.FormatInt(p, 10)
+	case float64:
+		return strconv.Itoa(int(p))
+	default:
+		return ""
+	}
+}
+
+func TestWriteTabbyConfigWithPort(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "cfg.yml")
+	if err := os.WriteFile(src, []byte("network:\n  port: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := backends.WriteTabbyConfigWithPort(src, 8116)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	network := doc["network"].(map[string]any)
+	if stringifyPort(network["port"]) != "8116" {
+		t.Fatalf("port = %v, want 8116", network["port"])
 	}
 }
 
@@ -368,10 +537,10 @@ func TestTabbyBuildEnvironment_InjectsSlotsShim(t *testing.T) {
 
 func TestTabbyWorkingDir(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   string
-		args     []string
-		want     string
+		name      string
+		config    string
+		args      []string
+		want      string
 		wantEmpty bool
 	}{
 		{
@@ -399,10 +568,10 @@ func TestTabbyWorkingDir(t *testing.T) {
 			want:   filepath.Clean(`D:\opt\tabbyAPI`),
 		},
 		{
-			name:      "relative config ignored, falls through to main.py",
-			config:    "config.yml",
-			args:      []string{`E:\tabby\main.py`},
-			want:      filepath.Clean(`E:\tabby`),
+			name:   "relative config ignored, falls through to main.py",
+			config: "config.yml",
+			args:   []string{`E:\tabby\main.py`},
+			want:   filepath.Clean(`E:\tabby`),
 		},
 		{
 			name:      "relative main.py alone yields empty",
