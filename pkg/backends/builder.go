@@ -8,8 +8,18 @@ import (
 	"strings"
 )
 
-// BuildCommandArgs converts a struct to command line arguments
+// BuildCommandArgs converts a struct to command line arguments.
+// Bool fields emit bare "--flag" (store_true style). Pass typedBoolFlags
+// via BuildCommandArgsTyped for backends like Tabby whose argparse expects
+// "--flag true" instead.
 func BuildCommandArgs(options any, multipleFlags map[string]struct{}) []string {
+	return BuildCommandArgsTyped(options, multipleFlags, nil)
+}
+
+// BuildCommandArgsTyped is BuildCommandArgs with an optional typedBoolFlags set.
+// Entries are snake_case json field names; when the field is true, emit
+// "--kebab-name", "true" rather than a bare "--kebab-name".
+func BuildCommandArgsTyped(options any, multipleFlags, typedBoolFlags map[string]struct{}) []string {
 	var args []string
 
 	v := reflect.ValueOf(options).Elem()
@@ -36,7 +46,11 @@ func BuildCommandArgs(options any, multipleFlags map[string]struct{}) []string {
 		switch field.Kind() {
 		case reflect.Bool:
 			if field.Bool() {
-				args = append(args, "--"+flagName)
+				if _, typed := typedBoolFlags[jsonFieldName]; typed {
+					args = append(args, "--"+flagName, "true")
+				} else {
+					args = append(args, "--"+flagName)
+				}
 			}
 		case reflect.Int:
 			if field.Int() != 0 {
@@ -95,17 +109,26 @@ func BuildDockerCommand(backendConfig *config.BackendSettings, instanceArgs []st
 }
 
 // convertExtraArgsToFlags converts map[string]string to command flags
-// Empty values become boolean flags: {"flag": ""} → ["--flag"]
-// Non-empty values: {"flag": "value"} → ["--flag", "value"]
+// Empty values become boolean flags: {"flag": ""} -> ["--flag"]
+// Non-empty values: {"flag": "value"} -> ["--flag", "value"]
 func convertExtraArgsToFlags(extraArgs map[string]string) []string {
+	return convertExtraArgsToFlagsTyped(extraArgs, false)
+}
+
+// convertExtraArgsToFlagsTyped is like convertExtraArgsToFlags; when emptyAsTrue
+// is set, empty values emit "--flag true" (Tabby argparse requires an argument
+// for every Pydantic bool field, including ExtraArgs like warmup).
+func convertExtraArgsToFlagsTyped(extraArgs map[string]string, emptyAsTrue bool) []string {
 	var args []string
 
 	for key, value := range extraArgs {
 		if value == "" {
-			// Boolean flag
-			args = append(args, "--"+key)
+			if emptyAsTrue {
+				args = append(args, "--"+key, "true")
+			} else {
+				args = append(args, "--"+key)
+			}
 		} else {
-			// Value flag
 			args = append(args, "--"+key, value)
 		}
 	}

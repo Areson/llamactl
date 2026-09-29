@@ -245,13 +245,16 @@ func TestTabbyBuildCommandArgs_AdvancedFields(t *testing.T) {
 		"--max-batch-size", "2",
 		"--draft-mode", "mtp",
 		"--draft-num-tokens", "5",
-		"--warmup",
+		"--warmup", "true",
 	}
 
 	for _, expectedArg := range expected {
 		if !testutil.Contains(args, expectedArg) {
 			t.Errorf("Expected argument %q not found in %v", expectedArg, args)
 		}
+	}
+	if !hasFlagValue(args, "--warmup", "true") {
+		t.Errorf("expected --warmup true (Tabby typed bool), got %v", args)
 	}
 }
 
@@ -269,13 +272,15 @@ func TestTabbyBuildCommandArgs_VisionFields(t *testing.T) {
 
 	args := options.BuildCommandArgs()
 
+	// Tabby argparse (common/args.py) is not store_true for bools — emit
+	// "--vision true" / "--vision-offload true" / "--warmup true".
 	expected := []string{
 		"--host", "127.0.0.1",
 		"--port", "8117",
-		"--vision",
-		"--vision-offload",
+		"--vision", "true",
+		"--vision-offload", "true",
 		"--sysmem-multimodal-cache", "2048",
-		"--warmup",
+		"--warmup", "true",
 	}
 
 	for _, expectedArg := range expected {
@@ -283,6 +288,25 @@ func TestTabbyBuildCommandArgs_VisionFields(t *testing.T) {
 			t.Errorf("Expected argument %q not found in %v", expectedArg, args)
 		}
 	}
+	for _, pair := range [][2]string{
+		{"--vision", "true"},
+		{"--vision-offload", "true"},
+		{"--warmup", "true"},
+	} {
+		if !hasFlagValue(args, pair[0], pair[1]) {
+			t.Errorf("expected %s %s (Tabby typed bool), got %v", pair[0], pair[1], args)
+		}
+	}
+}
+
+// hasFlagValue reports whether args contains consecutive flag, value.
+func hasFlagValue(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTabbyOmitConfigForPort(t *testing.T) {

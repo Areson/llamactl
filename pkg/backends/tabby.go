@@ -47,7 +47,8 @@ type TabbyServerOptions struct {
 
 	// Vision / multimodal (ModelConfig + PerformanceConfig). Tabby loads the
 	// vision tower from the same model_name folder when the model supports it;
-	// there is no separate vision model path.
+	// there is no separate vision model path. Emitted as typed CLI bools
+	// ("--vision true") because Tabby argparse is not store_true.
 	Vision                bool `json:"vision,omitempty"`
 	VisionOffload         bool `json:"vision_offload,omitempty"`
 	SysmemMultimodalCache int  `json:"sysmem_multimodal_cache,omitempty"`
@@ -174,6 +175,14 @@ func WriteTabbyConfigWithPort(srcConfig string, port int) (string, error) {
 	return path, nil
 }
 
+// tabbyTypedBoolFlags are ModelConfig / PerformanceConfig bools whose Tabby
+// argparse (common/args.py add_field_to_group) is NOT store_true — every field
+// expects one argument, so we must emit "--vision true" not bare "--vision".
+var tabbyTypedBoolFlags = map[string]struct{}{
+	"vision":         {},
+	"vision_offload": {},
+}
+
 // BuildCommandArgs converts to command line arguments.
 //
 // Tabby _from_args returns early when --config is set, discarding CLI --port
@@ -196,8 +205,10 @@ func (o *TabbyServerOptions) BuildCommandArgs() []string {
 		// port may mismatch). Spawn still works; health will surface the miss.
 	}
 
-	args := BuildCommandArgs(&cp, multipleFlags)
-	args = append(args, convertExtraArgsToFlags(cp.ExtraArgs)...)
+	// Tabby argparse requires a value for every Pydantic field, including bools
+	// (vision, vision_offload) and ExtraArgs bools like warmup.
+	args := BuildCommandArgsTyped(&cp, multipleFlags, tabbyTypedBoolFlags)
+	args = append(args, convertExtraArgsToFlagsTyped(cp.ExtraArgs, true)...)
 	return args
 }
 
