@@ -36,8 +36,17 @@ type TabbyServerOptions struct {
 	// WriteTabbyConfigWithPort) so GetPort() always matches the bind port.
 	Config string `json:"config,omitempty"`
 
+	// Advanced ModelConfig / DraftModelConfig knobs (first-class, MLX-shaped).
+	// Map to Tabby CLI flags via BuildCommandArgs (snake_case -> kebab-case).
+	// CUDA_VISIBLE_DEVICES stays an instance environment var, not a field here.
+	CacheSize      int    `json:"cache_size,omitempty"`
+	CacheMode      string `json:"cache_mode,omitempty"`
+	MaxBatchSize   int    `json:"max_batch_size,omitempty"`
+	DraftMode      string `json:"draft_mode,omitempty"`
+	DraftNumTokens int    `json:"draft_num_tokens,omitempty"`
+
 	// ExtraArgs are additional command line arguments.
-	// Example: {"cache_size": "262144", "warmup": ""}
+	// Example: {"warmup": "", "vision": "true"}
 	ExtraArgs map[string]string `json:"extra_args,omitempty"`
 }
 

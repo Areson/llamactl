@@ -13,6 +13,13 @@ export const TabbyBackendOptionsSchema = z.object({
   // Optional overriding config.yml path
   config: z.string().optional(),
 
+  // Advanced ModelConfig / DraftModelConfig knobs
+  cache_size: z.number().optional(),
+  cache_mode: z.string().optional(),
+  max_batch_size: z.number().optional(),
+  draft_mode: z.enum(['model', 'disabled', 'mtp', 'ngram']).optional(),
+  draft_num_tokens: z.number().optional(),
+
   // Extra args
   extra_args: z.record(z.string(), z.string()).optional(),
 })

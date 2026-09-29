@@ -147,11 +147,16 @@ func TestTabbyValidate(t *testing.T) {
 
 func TestTabbyBuildCommandArgs_ZeroValues(t *testing.T) {
 	options := backends.TabbyServerOptions{
-		Port:      0,
-		Host:      "",
-		ModelName: "",
-		ModelDir:  "",
-		Config:    "",
+		Port:           0,
+		Host:           "",
+		ModelName:      "",
+		ModelDir:       "",
+		Config:         "",
+		CacheSize:      0,
+		CacheMode:      "",
+		MaxBatchSize:   0,
+		DraftMode:      "",
+		DraftNumTokens: 0,
 	}
 
 	args := options.BuildCommandArgs()
@@ -162,6 +167,11 @@ func TestTabbyBuildCommandArgs_ZeroValues(t *testing.T) {
 		"--model-name", "",
 		"--model-dir", "",
 		"--config", "",
+		"--cache-size", "0",
+		"--cache-mode", "",
+		"--max-batch-size", "0",
+		"--draft-mode", "",
+		"--draft-num-tokens", "0",
 	}
 
 	for _, excludedArg := range excludedArgs {
@@ -205,6 +215,39 @@ func TestTabbyBuildCommandArgs_Fields(t *testing.T) {
 	}
 }
 
+func TestTabbyBuildCommandArgs_AdvancedFields(t *testing.T) {
+	options := backends.TabbyServerOptions{
+		Host:           "127.0.0.1",
+		Port:           8116,
+		CacheSize:      262144,
+		CacheMode:      "Q4",
+		MaxBatchSize:   2,
+		DraftMode:      "mtp",
+		DraftNumTokens: 5,
+		ExtraArgs: map[string]string{
+			"warmup": "",
+		},
+	}
+
+	args := options.BuildCommandArgs()
+
+	expected := []string{
+		"--host", "127.0.0.1",
+		"--port", "8116",
+		"--cache-size", "262144",
+		"--cache-mode", "Q4",
+		"--max-batch-size", "2",
+		"--draft-mode", "mtp",
+		"--draft-num-tokens", "5",
+		"--warmup",
+	}
+
+	for _, expectedArg := range expected {
+		if !testutil.Contains(args, expectedArg) {
+			t.Errorf("Expected argument %q not found in %v", expectedArg, args)
+		}
+	}
+}
 func TestTabbyOmitConfigForPort(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -371,7 +414,7 @@ func TestParseTabbyCommand_ExtraArgs(t *testing.T) {
 		validate  func(*testing.T, *backends.TabbyServerOptions)
 	}{
 		{
-			name:      "extra args with known fields",
+			name:      "typed advanced fields with remaining extra args",
 			command:   "main.py --host 127.0.0.1 --port 8109 --cache-size 262144 --warmup",
 			expectErr: false,
 			validate: func(t *testing.T, opts *backends.TabbyServerOptions) {
@@ -381,11 +424,14 @@ func TestParseTabbyCommand_ExtraArgs(t *testing.T) {
 				if opts.Port != 8109 {
 					t.Errorf("expected port 8109, got %d", opts.Port)
 				}
+				if opts.CacheSize != 262144 {
+					t.Errorf("expected cache_size 262144, got %d", opts.CacheSize)
+				}
+				if _, ok := opts.ExtraArgs["cache_size"]; ok {
+					t.Error("cache_size should be typed, not in extra_args")
+				}
 				if opts.ExtraArgs == nil {
 					t.Fatal("expected extra_args to be non-nil")
-				}
-				if val, ok := opts.ExtraArgs["cache_size"]; !ok || val != "262144" {
-					t.Errorf("expected extra_args[cache_size]='262144', got '%s'", val)
 				}
 				if val, ok := opts.ExtraArgs["warmup"]; !ok || val != "true" {
 					t.Errorf("expected extra_args[warmup]='true', got '%s'", val)
@@ -393,15 +439,18 @@ func TestParseTabbyCommand_ExtraArgs(t *testing.T) {
 			},
 		},
 		{
-			name:      "only extra args",
+			name:      "typed max_batch_size with remaining extra args",
 			command:   "main.py --max-batch-size 2 --vision",
 			expectErr: false,
 			validate: func(t *testing.T, opts *backends.TabbyServerOptions) {
+				if opts.MaxBatchSize != 2 {
+					t.Errorf("expected max_batch_size 2, got %d", opts.MaxBatchSize)
+				}
+				if _, ok := opts.ExtraArgs["max_batch_size"]; ok {
+					t.Error("max_batch_size should be typed, not in extra_args")
+				}
 				if opts.ExtraArgs == nil {
 					t.Fatal("expected extra_args to be non-nil")
-				}
-				if val, ok := opts.ExtraArgs["max_batch_size"]; !ok || val != "2" {
-					t.Errorf("expected extra_args[max_batch_size]='2', got '%s'", val)
 				}
 				if val, ok := opts.ExtraArgs["vision"]; !ok || val != "true" {
 					t.Errorf("expected extra_args[vision]='true', got '%s'", val)
