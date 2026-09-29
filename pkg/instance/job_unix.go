@@ -12,7 +12,10 @@ import (
 // cgroup work.
 type processJob struct{}
 
-func newProcessJob() (*processJob, error) { return nil, nil }
+func newProcessJob(instanceName string) (*processJob, error) {
+	_ = instanceName
+	return nil, nil
+}
 
 func (j *processJob) prepareCmd(cmd *exec.Cmd) {}
 

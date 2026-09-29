@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -20,7 +21,9 @@ import (
 // PID does not reach.
 //
 // Design (ported from the Path B C launcher intent):
-//   - Anonymous job (NULL name) so concurrent instances do not share a job.
+//   - Named job (Local\llamactl-job-<instance>) so a hot-swap successor can
+//     OpenJobObject and TerminateJobObject without inheriting the handle.
+//     Names are unique per instance so concurrent instances do not share a job.
 //   - JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so the last handle close kills members.
 //   - No BREAKAWAY_OK / SILENT_BREAKAWAY_OK: children of members stay in the job
 //     (backends must not pass CREATE_BREAKAWAY_FROM_JOB).
@@ -37,16 +40,65 @@ import (
 // is small; any grandchild created before assign would not join the job.
 type processJob struct {
 	handle windows.Handle
+	name   string // Local\llamactl-job-<instance>; empty if anonymous (tests)
 }
 
-// newProcessJob creates and configures a kill-tree job. The handle is
-// inheritable so it can be passed to the child for hot-swap survival.
-func newProcessJob() (*processJob, error) {
+// Job Object access rights (winnt.h); not exported by x/sys/windows.
+const (
+	jobObjectAssignProcess = 0x0001
+	jobObjectSetAttributes = 0x0002
+	jobObjectQuery         = 0x0004
+	jobObjectTerminate     = 0x0008
+	jobObjectAccess        = jobObjectAssignProcess | jobObjectSetAttributes | jobObjectQuery | jobObjectTerminate
+)
+
+var (
+	modKernel32Job     = windows.NewLazySystemDLL("kernel32.dll")
+	procOpenJobObjectW = modKernel32Job.NewProc("OpenJobObjectW")
+)
+
+// jobObjectName returns the kernel object name for an instance's Job Object.
+func jobObjectName(instanceName string) string {
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '-' || r == '_' || r == '.':
+			return r
+		default:
+			return '_'
+		}
+	}, instanceName)
+	if safe == "" {
+		safe = "unnamed"
+	}
+	if len(safe) > 64 {
+		safe = safe[:64]
+	}
+	return `Local\llamactl-job-` + safe
+}
+
+// newProcessJob creates and configures a kill-tree job. When instanceName is
+// non-empty the job is named so a hot-swap successor can reopen it. The handle
+// is inheritable so it can be passed to the child for hot-swap survival.
+func newProcessJob(instanceName string) (*processJob, error) {
 	sa := &windows.SecurityAttributes{
 		Length:        uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
 		InheritHandle: 1,
 	}
-	h, err := windows.CreateJobObject(sa, nil)
+
+	var namePtr *uint16
+	name := ""
+	if instanceName != "" {
+		name = jobObjectName(instanceName)
+		var err error
+		namePtr, err = windows.UTF16PtrFromString(name)
+		if err != nil {
+			return nil, fmt.Errorf("job object name: %w", err)
+		}
+	}
+
+	h, err := windows.CreateJobObject(sa, namePtr)
 	if err != nil {
 		return nil, fmt.Errorf("CreateJobObject: %w", err)
 	}
@@ -63,7 +115,37 @@ func newProcessJob() (*processJob, error) {
 		return nil, fmt.Errorf("SetInformationJobObject(KILL_ON_JOB_CLOSE): %w", err)
 	}
 
-	return &processJob{handle: h}, nil
+	return &processJob{handle: h, name: name}, nil
+}
+
+// openProcessJob opens an existing named Job Object created for instanceName.
+// Returns an error if the job does not exist (e.g. anonymous job from an older
+// binary, or the instance was never started with a named job).
+func openProcessJob(instanceName string) (*processJob, error) {
+	if instanceName == "" {
+		return nil, fmt.Errorf("empty instance name")
+	}
+	name := jobObjectName(instanceName)
+	namePtr, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := procOpenJobObjectW.Find(); err != nil {
+		return nil, fmt.Errorf("OpenJobObjectW: %w", err)
+	}
+	r0, _, e1 := syscall.SyscallN(
+		procOpenJobObjectW.Addr(),
+		uintptr(jobObjectAccess),
+		0, // bInheritHandle
+		uintptr(unsafe.Pointer(namePtr)),
+	)
+	if r0 == 0 {
+		if e1 != 0 {
+			return nil, fmt.Errorf("OpenJobObject(%s): %w", name, e1)
+		}
+		return nil, fmt.Errorf("OpenJobObject(%s): failed", name)
+	}
+	return &processJob{handle: windows.Handle(r0), name: name}, nil
 }
 
 // prepareCmd adds the job handle to the child's inherited handle list so the
@@ -95,6 +177,24 @@ func (j *processJob) assign(proc *os.Process) error {
 	}
 	if assignErr != nil {
 		return fmt.Errorf("AssignProcessToJobObject: %w", assignErr)
+	}
+	return nil
+}
+
+// assignPID opens the process by PID and assigns it to the job.
+// Fails if the process is already in a different (non-nested) job.
+func (j *processJob) assignPID(pid int) error {
+	if j == nil || pid <= 0 {
+		return nil
+	}
+	const access = windows.PROCESS_SET_QUOTA | windows.PROCESS_TERMINATE
+	h, err := windows.OpenProcess(access, false, uint32(pid))
+	if err != nil {
+		return fmt.Errorf("OpenProcess(%d): %w", pid, err)
+	}
+	defer windows.CloseHandle(h)
+	if err := windows.AssignProcessToJobObject(j.handle, h); err != nil {
+		return fmt.Errorf("AssignProcessToJobObject(pid=%d): %w", pid, err)
 	}
 	return nil
 }

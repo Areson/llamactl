@@ -113,7 +113,11 @@ func (p *process) start() error {
 	// Windows: create a Job Object and inherit its handle into the child so
 	// stopping/killing tears down the whole tree (Tabby re-exec, uvicorn, etc.)
 	// while hot-swap can still leave the tree alive when llamactl A exits.
-	if job, jerr := newProcessJob(); jerr != nil {
+	// Fresh spawn owns the process; clear any prior adopt flag so stop()
+	// uses the Job Object path rather than stopAdopted.
+	p.instance.SetAdopted(false)
+
+	if job, jerr := newProcessJob(p.instance.Name); jerr != nil {
 		log.Printf("Instance %s: Job Object unavailable (%v); continuing without kill-tree", p.instance.Name, jerr)
 	} else if job != nil {
 		p.job = job
@@ -601,9 +605,11 @@ func portInUse(host string, port int) bool {
 // generation. The process was started by a different llamactl, so we don't
 // have the pipe handles. Instead we:
 //  1. Read the PID from runtime.json
-//  2. Send a platform-appropriate stop signal (stdin EOF is unavailable;
-//     use TerminateProcess on Windows, SIGTERM on Unix)
+//  2. On Windows: prefer TerminateJobObject via the named Job Object (kill-tree);
+//     fall back to assigning descendants into a new job or TerminateProcess on
+//     each descendant. On Unix: SIGTERM the root PID.
 //  3. Wait for the port to release (up to 30s)
+//  4. Clear the adopted flag so a later start/stop uses the owned-process path.
 func (p *process) stopAdopted() error {
 	host, port := p.instance.options.GetHost(), p.instance.options.GetPort()
 	if host == "" {
@@ -619,6 +625,7 @@ func (p *process) stopAdopted() error {
 	}
 	if state == nil {
 		// No state file. The process may have already exited.
+		p.instance.SetAdopted(false)
 		p.instance.SetStatus(Stopped)
 		log.Printf("Instance %s: no runtime state found (adopted); assuming already stopped", p.instance.Name)
 		return nil
@@ -626,9 +633,18 @@ func (p *process) stopAdopted() error {
 
 	log.Printf("Instance %s (adopted): stopping PID %d, port %d", p.instance.Name, state.PID, state.Port)
 
-	// Signal the process.
-	if err := stopProcessByPID(state.PID); err != nil {
-		log.Printf("Instance %s: failed to signal PID %d: %v", p.instance.Name, state.PID, err)
+	method, kerr := stopAdoptedProcessTree(p.instance.Name, state.PID)
+	if kerr != nil {
+		log.Printf("Instance %s (adopted): stop tree failed (%s): %v", p.instance.Name, method, kerr)
+	} else {
+		switch method {
+		case "job", "job-assign":
+			log.Printf("Instance %s (adopted): job tree terminated (%s)", p.instance.Name, method)
+		case "tree-kill":
+			log.Printf("Instance %s (adopted): adopted fallback tree-kill completed", p.instance.Name)
+		default:
+			log.Printf("Instance %s (adopted): stopped via %s", p.instance.Name, method)
+		}
 	}
 
 	// Wait for the port to release (up to 30s).
@@ -646,6 +662,7 @@ func (p *process) stopAdopted() error {
 		log.Printf("Instance %s: warning: failed to remove runtime state: %v", p.instance.Name, err)
 	}
 
+	p.instance.SetAdopted(false)
 	p.instance.SetStatus(Stopped)
 	log.Printf("Instance %s (adopted): stopped", p.instance.Name)
 	return nil

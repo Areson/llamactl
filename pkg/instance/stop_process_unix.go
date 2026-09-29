@@ -24,3 +24,14 @@ func stopProcessByPID(pid int) error {
 	}
 	return nil
 }
+
+// stopAdoptedProcessTree stops an adopted process on non-Windows by signaling
+// the root PID (process-group kill remains Setpgid + signalStop for owned
+// spawns). Returns method "signal".
+func stopAdoptedProcessTree(instanceName string, rootPID int) (method string, err error) {
+	_ = instanceName
+	if err := stopProcessByPID(rootPID); err != nil {
+		return "signal", err
+	}
+	return "signal", nil
+}
