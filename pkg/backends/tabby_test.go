@@ -147,16 +147,19 @@ func TestTabbyValidate(t *testing.T) {
 
 func TestTabbyBuildCommandArgs_ZeroValues(t *testing.T) {
 	options := backends.TabbyServerOptions{
-		Port:           0,
-		Host:           "",
-		ModelName:      "",
-		ModelDir:       "",
-		Config:         "",
-		CacheSize:      0,
-		CacheMode:      "",
-		MaxBatchSize:   0,
-		DraftMode:      "",
-		DraftNumTokens: 0,
+		Port:                  0,
+		Host:                  "",
+		ModelName:             "",
+		ModelDir:              "",
+		Config:                "",
+		CacheSize:             0,
+		CacheMode:             "",
+		MaxBatchSize:          0,
+		DraftMode:             "",
+		DraftNumTokens:        0,
+		Vision:                false,
+		VisionOffload:         false,
+		SysmemMultimodalCache: 0,
 	}
 
 	args := options.BuildCommandArgs()
@@ -172,6 +175,9 @@ func TestTabbyBuildCommandArgs_ZeroValues(t *testing.T) {
 		"--max-batch-size", "0",
 		"--draft-mode", "",
 		"--draft-num-tokens", "0",
+		"--vision",
+		"--vision-offload",
+		"--sysmem-multimodal-cache", "0",
 	}
 
 	for _, excludedArg := range excludedArgs {
@@ -248,6 +254,37 @@ func TestTabbyBuildCommandArgs_AdvancedFields(t *testing.T) {
 		}
 	}
 }
+
+func TestTabbyBuildCommandArgs_VisionFields(t *testing.T) {
+	options := backends.TabbyServerOptions{
+		Host:                  "127.0.0.1",
+		Port:                  8117,
+		Vision:                true,
+		VisionOffload:         true,
+		SysmemMultimodalCache: 2048,
+		ExtraArgs: map[string]string{
+			"warmup": "",
+		},
+	}
+
+	args := options.BuildCommandArgs()
+
+	expected := []string{
+		"--host", "127.0.0.1",
+		"--port", "8117",
+		"--vision",
+		"--vision-offload",
+		"--sysmem-multimodal-cache", "2048",
+		"--warmup",
+	}
+
+	for _, expectedArg := range expected {
+		if !testutil.Contains(args, expectedArg) {
+			t.Errorf("Expected argument %q not found in %v", expectedArg, args)
+		}
+	}
+}
+
 func TestTabbyOmitConfigForPort(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -439,21 +476,39 @@ func TestParseTabbyCommand_ExtraArgs(t *testing.T) {
 			},
 		},
 		{
-			name:      "typed max_batch_size with remaining extra args",
-			command:   "main.py --max-batch-size 2 --vision",
+			name:      "typed max_batch_size and vision with remaining extra args",
+			command:   "main.py --max-batch-size 2 --vision --vision-offload --sysmem-multimodal-cache 2048 --warmup",
 			expectErr: false,
 			validate: func(t *testing.T, opts *backends.TabbyServerOptions) {
 				if opts.MaxBatchSize != 2 {
 					t.Errorf("expected max_batch_size 2, got %d", opts.MaxBatchSize)
 				}
+				if !opts.Vision {
+					t.Error("expected vision true")
+				}
+				if !opts.VisionOffload {
+					t.Error("expected vision_offload true")
+				}
+				if opts.SysmemMultimodalCache != 2048 {
+					t.Errorf("expected sysmem_multimodal_cache 2048, got %d", opts.SysmemMultimodalCache)
+				}
 				if _, ok := opts.ExtraArgs["max_batch_size"]; ok {
 					t.Error("max_batch_size should be typed, not in extra_args")
+				}
+				if _, ok := opts.ExtraArgs["vision"]; ok {
+					t.Error("vision should be typed, not in extra_args")
+				}
+				if _, ok := opts.ExtraArgs["vision_offload"]; ok {
+					t.Error("vision_offload should be typed, not in extra_args")
+				}
+				if _, ok := opts.ExtraArgs["sysmem_multimodal_cache"]; ok {
+					t.Error("sysmem_multimodal_cache should be typed, not in extra_args")
 				}
 				if opts.ExtraArgs == nil {
 					t.Fatal("expected extra_args to be non-nil")
 				}
-				if val, ok := opts.ExtraArgs["vision"]; !ok || val != "true" {
-					t.Errorf("expected extra_args[vision]='true', got '%s'", val)
+				if val, ok := opts.ExtraArgs["warmup"]; !ok || val != "true" {
+					t.Errorf("expected extra_args[warmup]='true', got '%s'", val)
 				}
 			},
 		},

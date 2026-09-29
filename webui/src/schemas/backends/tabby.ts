@@ -20,6 +20,11 @@ export const TabbyBackendOptionsSchema = z.object({
   draft_mode: z.enum(['model', 'disabled', 'mtp', 'ngram']).optional(),
   draft_num_tokens: z.number().optional(),
 
+  // Vision / multimodal (same model folder; no separate vision path)
+  vision: z.boolean().optional(),
+  vision_offload: z.boolean().optional(),
+  sysmem_multimodal_cache: z.number().optional(),
+
   // Extra args
   extra_args: z.record(z.string(), z.string()).optional(),
 })

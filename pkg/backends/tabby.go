@@ -45,8 +45,15 @@ type TabbyServerOptions struct {
 	DraftMode      string `json:"draft_mode,omitempty"`
 	DraftNumTokens int    `json:"draft_num_tokens,omitempty"`
 
+	// Vision / multimodal (ModelConfig + PerformanceConfig). Tabby loads the
+	// vision tower from the same model_name folder when the model supports it;
+	// there is no separate vision model path.
+	Vision                bool `json:"vision,omitempty"`
+	VisionOffload         bool `json:"vision_offload,omitempty"`
+	SysmemMultimodalCache int  `json:"sysmem_multimodal_cache,omitempty"`
+
 	// ExtraArgs are additional command line arguments.
-	// Example: {"warmup": "", "vision": "true"}
+	// Example: {"warmup": ""}
 	ExtraArgs map[string]string `json:"extra_args,omitempty"`
 }
 
