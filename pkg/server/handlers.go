@@ -158,14 +158,11 @@ func (h *Handler) maybeStartLocked(inst *instance.Instance, canEvict bool) error
 	}
 
 	if !h.cfg.Instances.EnableLRUEviction {
-		return h.rejectIfAtCapacity()
-	}
-
-	if canEvict {
-		if err := h.evictFromGroupQuota(options.Group); err != nil {
+		if err := h.rejectIfAtCapacity(); err != nil {
 			return err
 		}
-		if err := h.evictFromGlobalCapacity(); err != nil {
+	} else if canEvict {
+		if err := h.prepareCapacityForStart(inst); err != nil {
 			return err
 		}
 	} else {
@@ -182,6 +179,22 @@ func (h *Handler) maybeStartLocked(inst *instance.Instance, canEvict bool) error
 	return nil
 }
 
+// prepareCapacityForStart runs group + global capacity eviction prep for starting
+// inst. Shared by on-demand starts and (when gated) manual Start so the paths
+// cannot drift. Callers must hold h.startMu.
+func (h *Handler) prepareCapacityForStart(inst *instance.Instance) error {
+	if !h.cfg.Instances.EnableLRUEviction {
+		return h.rejectIfAtCapacity()
+	}
+	group := ""
+	if opts := inst.GetOptions(); opts != nil {
+		group = opts.Group
+	}
+	if err := h.evictFromGroupQuota(group); err != nil {
+		return err
+	}
+	return h.evictFromGlobalCapacity()
+}
 func (h *Handler) rejectIfAtCapacity() error {
 	if h.InstanceManager.AtMaxRunning() {
 		return ErrMaxInstancesReached
@@ -225,18 +238,138 @@ func (h *Handler) evictFromGroupQuota(group string) error {
 	if h.InstanceManager.CountRunningInGroup(group) < groupLimit {
 		return nil
 	}
-	if err := h.InstanceManager.EvictLRUInstance(group); err != nil {
-		return fmt.Errorf("cannot start instance, failed to evict from group %s: %w", group, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- h.InstanceManager.EvictLRUInstance(group)
+	}()
+
+	if h.cfg.Instances.SynchronousGroupEviction {
+		return h.waitForSyncGroupEviction(group, errCh)
 	}
-	return nil
+
+	// Async (default): wait only until the group slot frees (status leaves
+	// Running → ShuttingDown) so the newcomer can start while the victim
+	// finishes tearing down.
+	return h.waitForGroupSlotOrErr(group, groupLimit, errCh)
+}
+
+// waitForSyncGroupEviction blocks until the group victim is fully stopped, or
+// until SynchronousGroupEvictionTimeoutSec elapses — then falls back to async
+// (returns nil so the start proceeds while eviction continues in background).
+func (h *Handler) waitForSyncGroupEviction(group string, errCh <-chan error) error {
+	timeoutSec := h.cfg.Instances.SynchronousGroupEvictionTimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+	defer timer.Stop()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return fmt.Errorf("cannot start instance, failed to evict from group %s: %w", group, err)
+		}
+		log.Printf("synchronous group eviction for group %q completed", group)
+		return nil
+	case <-timer.C:
+		log.Printf("synchronous group eviction for group %q timed out after %ds; falling back to async start", group, timeoutSec)
+		return nil
+	}
+}
+
+// waitForGroupSlotOrErr waits until CountRunningInGroup drops below the limit
+// (slot freed) or the eviction goroutine finishes/errors.
+func (h *Handler) waitForGroupSlotOrErr(group string, groupLimit int, errCh <-chan error) error {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(30 * time.Second)
+	for {
+		if h.InstanceManager.CountRunningInGroup(group) < groupLimit {
+			return nil
+		}
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return fmt.Errorf("cannot start instance, failed to evict from group %s: %w", group, err)
+			}
+			return nil
+		case <-ticker.C:
+		case <-deadline:
+			log.Printf("async group eviction for group %q: slot still occupied after 30s; proceeding", group)
+			return nil
+		}
+	}
 }
 
 func (h *Handler) evictFromGlobalCapacity() error {
 	if !h.InstanceManager.AtMaxRunning() {
 		return nil
 	}
-	if err := h.InstanceManager.EvictLRUInstance(""); err != nil {
-		return fmt.Errorf("cannot start instance, failed to evict instance: %w", err)
+
+	// Global capacity eviction stays async: kick off stop and wait only until
+	// the running-count slot frees (ShuttingDown), not for full process exit.
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- h.InstanceManager.EvictLRUInstance("")
+	}()
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(30 * time.Second)
+	for {
+		if !h.InstanceManager.AtMaxRunning() {
+			return nil
+		}
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return fmt.Errorf("cannot start instance, failed to evict instance: %w", err)
+			}
+			return nil
+		case <-ticker.C:
+		case <-deadline:
+			log.Printf("async global eviction: still at capacity after 30s; proceeding")
+			return nil
+		}
 	}
-	return nil
+}
+
+// waitForSyncSelfStop waits for a self-stop (Restart) to finish, or falls back
+// to async after SynchronousGroupEvictionTimeoutSec (proceed once !IsRunning).
+func (h *Handler) waitForSyncSelfStop(name string, errCh <-chan error) error {
+	timeoutSec := h.cfg.Instances.SynchronousGroupEvictionTimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+	timer := time.NewTimer(time.Duration(timeoutSec) * time.Second)
+	defer timer.Stop()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-timer.C:
+		log.Printf("synchronous self-stop for %q timed out after %ds; falling back to async restart", name, timeoutSec)
+		// Wait until the instance is no longer Running so Start can proceed.
+		deadline := time.After(5 * time.Second)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			inst, err := h.InstanceManager.GetInstance(name)
+			if err != nil {
+				return err
+			}
+			if !inst.IsRunning() {
+				return nil
+			}
+			select {
+			case err := <-errCh:
+				return err
+			case <-ticker.C:
+			case <-deadline:
+				log.Printf("self-stop for %q still running after async fallback grace; proceeding", name)
+				return nil
+			}
+		}
+	}
 }

@@ -169,6 +169,50 @@ func (h *Handler) StartInstance() http.HandlerFunc {
 			return
 		}
 
+		// Opt-in: same group/global capacity prep as on-demand starts.
+		if h.cfg.Instances.EvictOnManualStart {
+			inst, err := h.InstanceManager.GetInstance(validatedName)
+			if err != nil {
+				if errors.Is(err, manager.ErrInstanceNotFound) || manager.IsNotFoundError(err) {
+					writeError(w, http.StatusNotFound, "not_found", err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "get_failed", "Failed to get instance: "+err.Error())
+				return
+			}
+
+			h.startMu.Lock()
+			if inst.IsRunning() {
+				h.startMu.Unlock()
+				writeJSON(w, http.StatusOK, inst)
+				return
+			}
+			if err := h.prepareCapacityForStart(inst); err != nil {
+				h.startMu.Unlock()
+				if errors.Is(err, ErrMaxInstancesReached) {
+					writeError(w, http.StatusConflict, "max_instances_reached", err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "start_failed", "Failed to start instance: "+err.Error())
+				return
+			}
+			inst, err = h.InstanceManager.StartInstance(validatedName)
+			h.startMu.Unlock()
+			if err != nil {
+				if writeHotSwapBusy(w, err) {
+					return
+				}
+				if _, ok := err.(manager.MaxRunningInstancesError); ok {
+					writeError(w, http.StatusConflict, "max_instances_reached", err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "start_failed", "Failed to start instance: "+err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, inst)
+			return
+		}
+
 		inst, err := h.InstanceManager.StartInstance(validatedName)
 		if err != nil {
 			if writeHotSwapBusy(w, err) {
@@ -241,7 +285,36 @@ func (h *Handler) RestartInstance() http.HandlerFunc {
 			return
 		}
 
-		inst, err := h.InstanceManager.RestartInstance(validatedName)
+		// Restart is stop-self then start-self under startMu. No peer LRU eviction.
+		h.startMu.Lock()
+		defer h.startMu.Unlock()
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, stopErr := h.InstanceManager.StopInstance(validatedName)
+			errCh <- stopErr
+		}()
+
+		if h.cfg.Instances.SynchronousGroupEviction {
+			if err := h.waitForSyncSelfStop(validatedName, errCh); err != nil {
+				if writeHotSwapBusy(w, err) {
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "restart_failed", "Failed to restart instance: "+err.Error())
+				return
+			}
+		} else {
+			// Same-instance restart always needs stop to finish before start.
+			if err := <-errCh; err != nil {
+				if writeHotSwapBusy(w, err) {
+					return
+				}
+				writeError(w, http.StatusInternalServerError, "restart_failed", "Failed to restart instance: "+err.Error())
+				return
+			}
+		}
+
+		inst, err := h.InstanceManager.StartInstance(validatedName)
 		if err != nil {
 			if writeHotSwapBusy(w, err) {
 				return

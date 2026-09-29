@@ -64,6 +64,21 @@ func loadEnvVars(cfg *AppConfig) {
 			cfg.Instances.EnableLRUEviction = b
 		}
 	}
+	if evictOnManualStart := os.Getenv("LLAMACTL_EVICT_ON_MANUAL_START"); evictOnManualStart != "" {
+		if b, err := strconv.ParseBool(evictOnManualStart); err == nil {
+			cfg.Instances.EvictOnManualStart = b
+		}
+	}
+	if syncGroupEviction := os.Getenv("LLAMACTL_SYNCHRONOUS_GROUP_EVICTION"); syncGroupEviction != "" {
+		if b, err := strconv.ParseBool(syncGroupEviction); err == nil {
+			cfg.Instances.SynchronousGroupEviction = b
+		}
+	}
+	if syncGroupEvictionTimeout := os.Getenv("LLAMACTL_SYNCHRONOUS_GROUP_EVICTION_TIMEOUT_SEC"); syncGroupEvictionTimeout != "" {
+		if n, err := strconv.Atoi(syncGroupEvictionTimeout); err == nil {
+			cfg.Instances.SynchronousGroupEvictionTimeoutSec = n
+		}
+	}
 	// Backend config
 	// LlamaCpp backend
 	if llamaCmd := os.Getenv("LLAMACTL_LLAMACPP_COMMAND"); llamaCmd != "" {

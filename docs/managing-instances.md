@@ -349,7 +349,25 @@ instances:
   group_limits:
     large: 1    # Only 1 "large" instance running at a time
     small: 3    # Up to 3 "small" instances running at a time
+
+  # Opt-in: manual POST /instances/{name}/start uses the same group/global
+  # capacity prep (LRU eviction) as on-demand starts. Default false.
+  evict_on_manual_start: false
+
+  # Opt-in: when a group-quota eviction runs, wait until the victim is fully
+  # stopped before starting the newcomer. Global capacity eviction stays async.
+  # After synchronous_group_eviction_timeout_sec, fall back to async (start
+  # proceeds; do not hard-fail). Restart never peer-evicts; with sync on it
+  # applies the same timeout/fallback to waiting for self-stop.
+  synchronous_group_eviction: false
+  synchronous_group_eviction_timeout_sec: 30
 ```
+
+| Option | Default | Effect |
+|--------|---------|--------|
+| `evict_on_manual_start` | `false` | When `true`, manual Start runs `prepareCapacityForStart` (group then global LRU) under the same start lock as on-demand. |
+| `synchronous_group_eviction` | `false` | When `true`, group eviction waits for the victim to fully stop before the newcomer starts. Global eviction remains async. |
+| `synchronous_group_eviction_timeout_sec` | `30` | Sync wait budget; on expiry, fall back to async and continue the start. |
 
 ### Assigning a Group
 

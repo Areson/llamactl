@@ -36,7 +36,13 @@ type fakeInstanceManager struct {
 
 	startCalls int32 // atomic
 	evictCalls int32 // atomic
+	stopCalls  int32 // atomic
 	startDelay time.Duration
+	stopDelay  time.Duration // slows StopInstance / EvictLRU for sync-wait tests
+
+	// Optional hooks for ordering assertions in sync/timeout tests.
+	onEvictDone func()
+	onStart     func()
 }
 
 func newFakeInstanceManager() *fakeInstanceManager {
@@ -83,6 +89,9 @@ func (f *fakeInstanceManager) DeleteInstance(name string) error {
 
 func (f *fakeInstanceManager) StartInstance(name string) (*instance.Instance, error) {
 	atomic.AddInt32(&f.startCalls, 1)
+	if f.onStart != nil {
+		f.onStart()
+	}
 	if f.startDelay > 0 {
 		time.Sleep(f.startDelay)
 	}
@@ -125,6 +134,10 @@ func (f *fakeInstanceManager) CountRunningInGroup(group string) int {
 }
 
 func (f *fakeInstanceManager) StopInstance(name string) (*instance.Instance, error) {
+	atomic.AddInt32(&f.stopCalls, 1)
+	if f.stopDelay > 0 {
+		time.Sleep(f.stopDelay)
+	}
 	f.mu.Lock()
 	inst := f.instances[name]
 	f.mu.Unlock()
@@ -136,10 +149,11 @@ func (f *fakeInstanceManager) StopInstance(name string) (*instance.Instance, err
 }
 
 // EvictLRUInstance stops the oldest-running instance in the group.
+// Mirrors real stop: ShuttingDown frees the running slot immediately; an
+// optional stopDelay then elapses before Stopped (full teardown).
 func (f *fakeInstanceManager) EvictLRUInstance(group string) error {
 	atomic.AddInt32(&f.evictCalls, 1)
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	var victim *instance.Instance
 	for _, inst := range f.instances {
 		if group != "" && inst.GetOptions().Group != group {
@@ -152,10 +166,18 @@ func (f *fakeInstanceManager) EvictLRUInstance(group string) error {
 			victim = inst
 		}
 	}
+	f.mu.Unlock()
 	if victim == nil {
 		return fmt.Errorf("no running instance to evict in group %q", group)
 	}
+	victim.SetStatus(instance.ShuttingDown)
+	if f.stopDelay > 0 {
+		time.Sleep(f.stopDelay)
+	}
 	victim.SetStatus(instance.Stopped)
+	if f.onEvictDone != nil {
+		f.onEvictDone()
+	}
 	return nil
 }
 

@@ -70,24 +70,27 @@ func getDefaultConfig(dataDir string) AppConfig {
 			},
 		},
 		Instances: InstancesConfig{
-			PortRange:            [2]int{8000, 9000},
-			AutoCreateDirs:       true,
-			MaxInstances:         -1, // -1 means unlimited
-			MaxRunningInstances:  -1, // -1 means unlimited
-			GroupLimits:          map[string]int{},
-			EnableLRUEviction:    true,
-			DefaultIdleTimeout:   30, // Default idle timeout of 30 minutes
-			DefaultAutoRestart:   true,
-			DefaultMaxRestarts:   3,
-			DefaultRestartDelay:  5,
-			DefaultOnDemandStart: true,
-			OnDemandStartTimeout: 120, // 2 minutes
-			TimeoutCheckInterval: 5,   // Check timeouts every 5 minutes
-			LogsDir:              "",  // Will be set to data_dir/logs if empty
-			InstancesDir:         "",  // Will be set to data_dir/instances if empty
-			LogRotationEnabled:   true,
-			LogRotationMaxSize:   100,
-			LogRotationCompress:  false,
+			PortRange:                          [2]int{8000, 9000},
+			AutoCreateDirs:                     true,
+			MaxInstances:                       -1, // -1 means unlimited
+			MaxRunningInstances:                -1, // -1 means unlimited
+			GroupLimits:                        map[string]int{},
+			EnableLRUEviction:                  true,
+			EvictOnManualStart:                 false,
+			SynchronousGroupEviction:           false,
+			SynchronousGroupEvictionTimeoutSec: 30,
+			DefaultIdleTimeout:                 30, // Default idle timeout of 30 minutes
+			DefaultAutoRestart:                 true,
+			DefaultMaxRestarts:                 3,
+			DefaultRestartDelay:                5,
+			DefaultOnDemandStart:               true,
+			OnDemandStartTimeout:               120, // 2 minutes
+			TimeoutCheckInterval:               5,   // Check timeouts every 5 minutes
+			LogsDir:                            "",  // Will be set to data_dir/logs if empty
+			InstancesDir:                       "",  // Will be set to data_dir/instances if empty
+			LogRotationEnabled:                 true,
+			LogRotationMaxSize:                 100,
+			LogRotationCompress:                false,
 		},
 		Database: DatabaseConfig{
 			Path:               "", // Will be set to data_dir/llamactl.db if empty

@@ -99,6 +99,18 @@ type InstancesConfig struct {
 	// Enable LRU eviction for instance logs
 	EnableLRUEviction bool `yaml:"enable_lru_eviction" json:"enable_lru_eviction"`
 
+	// When true, manual POST /start runs the same group/global capacity prep
+	// (LRU eviction) as on-demand starts. Default false leaves Start unchanged.
+	EvictOnManualStart bool `yaml:"evict_on_manual_start" json:"evict_on_manual_start"`
+
+	// When true, group-quota eviction waits until the victim is fully stopped
+	// before starting the newcomer. Global capacity eviction stays async.
+	// On timeout, falls back to async (does not hard-fail the start).
+	SynchronousGroupEviction bool `yaml:"synchronous_group_eviction" json:"synchronous_group_eviction"`
+
+	// Timeout in seconds for synchronous group eviction before async fallback.
+	SynchronousGroupEvictionTimeoutSec int `yaml:"synchronous_group_eviction_timeout_sec" json:"synchronous_group_eviction_timeout_sec"`
+
 	// Default idle timeout for instances in minutes (0 means no timeout)
 	DefaultIdleTimeout int `yaml:"default_idle_timeout" json:"default_idle_timeout"`
 
