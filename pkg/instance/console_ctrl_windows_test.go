@@ -138,6 +138,31 @@ func TestConsoleCtrlC_NoConsoleFailsFast(t *testing.T) {
 	}
 }
 
+// Guard against the self-re-exec runaway: a binary that never called
+// RunConsoleCtrlHelper must not launch itself as the helper.
+func TestConsoleCtrlC_RefusesWithoutHelperDispatch(t *testing.T) {
+	cmd, _ := startTestCtrlChild(t, setProcAttrs)
+
+	helperDispatched.Store(false)
+	defer helperDispatched.Store(true) // TestMain dispatches for this binary
+
+	called := false
+	orig := consoleCtrlHelperExe
+	consoleCtrlHelperExe = func() (string, error) { called = true; return orig() }
+	defer func() { consoleCtrlHelperExe = orig }()
+
+	err := sendConsoleCtrlC(cmd.Process.Pid)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("err = %v, want helper-unavailable error", err)
+	}
+	if called {
+		t.Fatal("helper executable was resolved/launched despite no dispatch")
+	}
+	if !PIDAlive(cmd.Process.Pid) {
+		t.Fatal("target should be untouched (stop falls back to the hard kill)")
+	}
+}
+
 func TestWaitPIDExit_TimesOutWhileRunning(t *testing.T) {
 	cmd, _ := startTestCtrlChild(t, setProcAttrs)
 	if waitPIDExit(cmd.Process.Pid, 300*time.Millisecond) {

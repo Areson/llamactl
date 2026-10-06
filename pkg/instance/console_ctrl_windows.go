@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -25,9 +26,18 @@ var (
 	procGenerateConsoleCtrlEvnt = modKernel32Ctrl.NewProc("GenerateConsoleCtrlEvent")
 )
 
-// consoleCtrlHelperExe resolves the binary that serves ConsoleCtrlHelperArg.
-// Tests point it at the test binary (see TestMain).
+// consoleCtrlHelperExe resolves the binary that serves ConsoleCtrlHelperArg:
+// this process's own executable.
 var consoleCtrlHelperExe = os.Executable
+
+// helperDispatched records that this binary routes ConsoleCtrlHelperArg to
+// the helper (its main, or a test's TestMain, calls RunConsoleCtrlHelper
+// first). Without it, re-executing ourselves is unsafe: a binary that does
+// not dispatch the arg — e.g. another package's test binary — ignores it and
+// runs normally, which for a test binary means rerunning its suite, whose
+// stops launch more helpers (a runaway that once reached hundreds of
+// processes). Such binaries get an error, i.e. an immediate hard kill.
+var helperDispatched atomic.Bool
 
 const consoleCtrlHelperTimeout = 10 * time.Second
 
@@ -59,6 +69,9 @@ func sendConsoleCtrlC(pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("invalid PID: %d", pid)
 	}
+	if !helperDispatched.Load() {
+		return errors.New("console Ctrl-C helper unavailable: this binary does not dispatch " + ConsoleCtrlHelperArg)
+	}
 	exe, err := consoleCtrlHelperExe()
 	if err != nil {
 		return fmt.Errorf("resolve helper executable: %w", err)
@@ -89,7 +102,11 @@ func sendConsoleCtrlC(pid int) error {
 
 // RunConsoleCtrlHelper runs the helper side when args (os.Args) select it.
 // It reports whether args were a helper invocation and the exit code to use.
+//
+// Calling it also enables clean stops in this process (see
+// helperDispatched), so call it first thing in main.
 func RunConsoleCtrlHelper(args []string) (handled bool, exitCode int) {
+	helperDispatched.Store(true)
 	if len(args) < 2 || args[1] != ConsoleCtrlHelperArg {
 		return false, 0
 	}

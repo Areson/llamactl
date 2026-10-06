@@ -155,6 +155,19 @@ Tests reproduce both with the live error messages before the fix
 hot-swap E2E after the fix: phase `complete`, no rename failure, and B
 logged `Cleanup: removed old binary` ~1 s after A exited.
 
+**Incident (2026-10-05, test-only): self-re-exec runaway.** The helper is
+`os.Executable() __console-ctrl <pid>`. In another package's *test* binary
+(e.g. `manager.test.exe`), that arg is not dispatched, so the helper ran the
+whole test suite again, whose instance stops launched more helpers. Found
+~580 `manager.test.exe`, ~800 `sh -c "sleep 999999"` test instances and
+~1,900 orphaned `sleep.exe` (each with a console) on the dev box; all killed
+by exact match. Production was never affected (`main` dispatches the arg).
+Fix: the helper is only used once `RunConsoleCtrlHelper` has run in this
+process (`helperDispatched`); otherwise stop hard-kills as before. Test:
+`TestConsoleCtrlC_RefusesWithoutHelperDispatch`; `manager` suite now leaves no
+processes behind (2.2 s, was 22 s). Rule: never re-exec `os.Executable()`
+with a mode flag unless the binary is known to dispatch it.
+
 Compatibility: instances started by an older binary (`DETACHED_PROCESS`, no
 console) make `AttachConsole` fail → stop logs it and hard-kills immediately (no
 wasted grace). Next start uses the new flags.
