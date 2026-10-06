@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"llamactl/pkg/hotswap/ws2"
 )
@@ -115,9 +118,7 @@ func ASide(opts ASideOptions) error {
 		}
 	}
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x00000008 | 0x00000200, // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: bCreationFlags()}
 	if err := cmd.Start(); err != nil {
 		rollbackBinary(aExe, oldPath, cmd)
 		return failASide(dataDir, fmt.Errorf("failed to spawn B: %w", err))
@@ -281,6 +282,32 @@ func rollbackBinary(aExe, oldPath string, b *exec.Cmd) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+var procGetConsoleProcessList = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleProcessList")
+
+// bCreationFlags picks B's creation flags so B can be stopped with Ctrl-C.
+//
+// B inherits A's console (no flags) when A has one: a console outlives any
+// one attached process, so B survives A's exit, and a Ctrl-C on that console
+// (Servy/supervisor stop, or an interactive Ctrl-C) reaches whichever
+// generation is current and runs its clean shutdown. Without a console of
+// A's to share, CREATE_NO_WINDOW gives B its own hidden one instead of
+// Windows allocating a visible window. Never DETACHED_PROCESS (no console, so
+// no Ctrl-C) or CREATE_NEW_PROCESS_GROUP (sets the inherited ignore-Ctrl-C
+// flag). Model children are unaffected: they have their own consoles.
+func bCreationFlags() uint32 {
+	if hasConsole() {
+		return 0
+	}
+	return windows.CREATE_NO_WINDOW
+}
+
+// hasConsole reports whether this process is attached to a console.
+func hasConsole() bool {
+	var pids [1]uint32
+	n, _, _ := procGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), 1)
+	return n != 0
 }
 
 func pickFreePort() (int, error) {

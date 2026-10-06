@@ -181,7 +181,10 @@ curl -X POST http://localhost:8080/api/v1/instances/{name}/stop \
    hard-kills it (on Windows, the whole process tree via its Job Object).
 
 The same applies to idle-timeout and eviction stops, and to instances adopted
-after a hot-swap. Instances started by a llamactl build from before this
+after a hot-swap. Stopping llamactl itself with Ctrl-C (interactively, or a
+service wrapper that sends Ctrl-C) stops every running instance this way; on
+Windows a hot-swapped llamactl stays on the original console, so this still
+works after a hot-swap. Instances started by a llamactl build from before this
 behaviour have no console on Windows, so they are hard-killed immediately.
 
 ```yaml

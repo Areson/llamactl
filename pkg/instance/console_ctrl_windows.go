@@ -33,15 +33,17 @@ const consoleCtrlHelperTimeout = 10 * time.Second
 
 var clearCtrlCIgnoreOnce sync.Once
 
-// clearInheritedCtrlCIgnore turns Ctrl-C processing back on for llamactl so
-// backends it spawns inherit it enabled.
+// ClearInheritedCtrlCIgnore turns Ctrl-C processing back on for llamactl, so
+// llamactl itself shuts down cleanly on a console Ctrl-C (service stop,
+// interactive Ctrl-C) and the backends and hot-swap successors it spawns
+// inherit Ctrl-C enabled. Called at startup and again before each spawn.
 //
 // Windows keeps a per-process "ignore Ctrl-C" flag that children inherit and
 // that CREATE_NEW_PROCESS_GROUP sets. llamactl itself may carry it (hot-swap
 // B is spawned with CREATE_NEW_PROCESS_GROUP; service wrappers may set it).
 // With the flag set, CTRL_C_EVENT is delivered but no handler runs — the
 // child silently ignores the clean-stop request.
-func clearInheritedCtrlCIgnore() {
+func ClearInheritedCtrlCIgnore() {
 	clearCtrlCIgnoreOnce.Do(func() {
 		if r, _, err := procSetConsoleCtrlHandler.Call(0, 0); r == 0 {
 			log.Printf("SetConsoleCtrlHandler(NULL, FALSE) failed: %v; backends may ignore Ctrl-C stop", err)

@@ -91,6 +91,48 @@ procFreeConsole.Call()
 | Config `instances.graceful_stop_timeout_sec` (default 30, env `LLAMACTL_GRACEFUL_STOP_TIMEOUT_SEC`); replaces the hard-coded 30 s Unix / 5 s Windows | `pkg/config` |
 | Tests: real spawn flags + real helper (test binary doubles as helper and Ctrl-C child via `TestMain`); no-console fails fast; adopted path | `pkg/instance/console_ctrl_windows_test.go` |
 
+## Service stop and hot-swap: llamactl itself on Ctrl-C
+
+How the service stops (observed 2026-10-05): Servy (`StopTimeout` 5 s) sends
+Ctrl-C to the console of `start-llamactl.ps1` (in `E:\Model Cache\llamactl`).
+llamactl, started by the supervisor with `-NoNewWindow`, shares that console
+and already runs its full shutdown on `os.Interrupt` (`main.go`). But:
+
+- the supervisor POSTs a nonexistent `/api/v1/shutdown`, then hard-kills
+  llamactl ~2 s later and `TerminateProcess`es each model's root PID from
+  `runtime.json` (root only — Tabby's real python can be orphaned);
+- a hot-swapped generation was spawned `DETACHED_PROCESS |
+  CREATE_NEW_PROCESS_GROUP`: no console, so Servy's Ctrl-C never reached it.
+
+Fix without any endpoint:
+
+| Piece | Where |
+|---|---|
+| B inherits A's console (no creation flags); `CREATE_NO_WINDOW` if A has none (avoids a visible new console window) | `pkg/hotswap/hotswap_a.go` (`bCreationFlags`) |
+| `ClearInheritedCtrlCIgnore()` at llamactl startup, so llamactl itself honours Ctrl-C however it was launched | `cmd/server/main.go` |
+| Supervisor: wait for the generation to exit on its own; hard-kill (by job/tree) only after its timeout | `start-llamactl.ps1` — **outside repo, drafted, not applied** |
+| Servy `StopTimeout` 5 s → ~90 s | Servy config — **not applied** |
+
+A console outlives any one attached process, so B survives A's exit exactly
+as it did detached. Models stay on their own consoles, so the service Ctrl-C
+does not hit them directly; llamactl stops each with drain + grace.
+
+Evidence:
+- Prototype: A (on a console) spawns B with default flags and exits; Ctrl-C on
+  the console via B's PID → B gets SIGINT, clean exit.
+- **E2E with the real binary** (scratch runner, port 18079, isolated data dir):
+  v1 on its own console (runner's ignore flag deliberately *not* cleared) →
+  `fake-a` instance → hot-swap to v2 (B adopts `fake-a`) → `fake-b` started by
+  B → `llamactl __console-ctrl <B pid>` → B exited on its own in 1.2 s; both
+  fakes logged `received interrupt; saving` / `clean exit`; llamactl logged
+  `clean stop requested` and `shut down gracefully` for both (adopted and
+  owned paths). No hard kills.
+
+Seen during the E2E (pre-existing, not addressed): A's final rename of
+`handoff-state.json` can fail with "Access is denied" while something polls
+`/hot-swap/status`, leaving `phase` stuck at `in_progress` after a successful
+swap.
+
 Compatibility: instances started by an older binary (`DETACHED_PROCESS`, no
 console) make `AttachConsole` fail → stop logs it and hard-kills immediately (no
 wasted grace). Next start uses the new flags.
@@ -103,7 +145,10 @@ wasted grace). Next start uses the new flags.
 | Implemented + unit tests | ✅ |
 | E2E: llamactl Stop on a real Tabby instance → `Persisted prompt cache` in Tabby log | ⬜ needs a free GPU / a llamactl run on a test port |
 | E2E: llama-server instance clean stop (log shows its shutdown path) | ⬜ |
-| E2E: hot-swap, then Stop an adopted instance (spawned by the new binary) | ⬜ |
+| E2E: hot-swap, then Stop an adopted instance (spawned by the new binary) | ✅ (via service-style Ctrl-C of B; fake backends) |
+| E2E: Ctrl-C reaches hot-swapped B; B stops all instances cleanly | ✅ |
+| Supervisor `start-llamactl.ps1` waits instead of killing | ⬜ drafted (`start-llamactl.ps1.proposed`), needs review |
+| Servy `StopTimeout` raised | ⬜ needs admin change |
 | Interaction with `synchronous_group_eviction_timeout_sec` (30 s) when a victim uses most of a 30 s grace | ⬜ watch; sync wait already falls back to async on timeout |
 
 ## Not pursued

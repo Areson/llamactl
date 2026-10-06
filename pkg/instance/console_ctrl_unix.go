@@ -15,6 +15,10 @@ func RunConsoleCtrlHelper(args []string) (handled bool, exitCode int) {
 	return false, 0
 }
 
+// ClearInheritedCtrlCIgnore is Windows-only; Unix signal dispositions need no
+// equivalent here.
+func ClearInheritedCtrlCIgnore() {}
+
 // gracefulStopPID sends SIGINT, the same clean-stop request signalStop uses
 // for owned processes.
 func gracefulStopPID(pid int) error {

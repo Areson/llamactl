@@ -102,7 +102,7 @@ and let llamactl be pure plumbing (which can die).**
                     │  • proxies inference to model children       │
                     │  • swappable: dies and is replaced freely    │
                     └────────────────┬────────────────────────────┘
-                                     │ spawns (detached)
+                                     │ spawns (own hidden consoles)
                     ┌────────────────┴────────────────────────────┐
                     │         model children (llama-server)        │
                     │  • own the VRAM                               │
@@ -143,10 +143,11 @@ T2:  Copy the new binary into A's
      directory (if not already there):
      binary_path → llamactl-candidate.exe
 
-T3:  Spawn B detached:
+T3:  Spawn B on A's console:
      llamactl-candidate.exe --handoff-port=P --hot-swap
-     (CREATE_NEW_PROCESS_GROUP |
-      DETACHED_PROCESS on Windows)
+     (no creation flags: inherits A's
+      console; CREATE_NO_WINDOW if A
+      has none — see note below)
                                      T4:  WSAStartup
 T5:  Update handoff-state.json
      (phase: "starting", b_pid: <actual PID>)
@@ -212,8 +213,10 @@ exiting eliminates that window.
 
 ### 3.4 Model child adoption
 
-The model children are spawned **detached** (own process group, not console
-children), so they survive A's death. B discovers and adopts them:
+The model children are spawned on **their own hidden consoles**
+(`CREATE_NO_WINDOW`; originally `DETACHED_PROCESS`), so they survive A's death
+and can still be stopped cleanly with Ctrl-C — see `windows-clean-shutdown.md`.
+B discovers and adopts them:
 
 1. **Pidfile:** A writes `data/instances/<name>/runtime.json` at start:
    ```json
@@ -411,8 +414,15 @@ The hot-swap mechanism is **Windows-only** in v1:
 
 - `WSADuplicateSocket` is a Windows API (the POC is Windows-only).
 - The binary swap (rename → rename → delete) is a Windows pattern.
-- The process detachment flags (`CREATE_NEW_PROCESS_GROUP`, `DETACHED_PROCESS`)
+- The process creation flags (`CREATE_NO_WINDOW`, console inheritance for B)
   are Windows.
+
+> **Note (2026-10-05):** B originally used `DETACHED_PROCESS |
+> CREATE_NEW_PROCESS_GROUP`. That left every hot-swapped generation with no
+> console, so a service stop (Servy's Ctrl-C) could never reach it. B now
+> inherits A's console: a console outlives any one attached process, so B
+> still survives A's exit, and Ctrl-C reaches whichever generation is current.
+> Details and the end-to-end check in `windows-clean-shutdown.md`.
 
 **Implementation:**
 ```go

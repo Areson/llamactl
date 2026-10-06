@@ -20,7 +20,7 @@ import (
 //   - No CREATE_NEW_PROCESS_GROUP: it sets the inherited "ignore Ctrl-C" flag,
 //     which would make the child (and everything it spawns) ignore the event.
 func setProcAttrs(cmd *exec.Cmd) {
-	clearInheritedCtrlCIgnore()
+	ClearInheritedCtrlCIgnore()
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}

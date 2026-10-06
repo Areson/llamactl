@@ -84,6 +84,10 @@ func main() {
 		os.Exit(code)
 	}
 
+	// Windows: undo an inherited "ignore Ctrl-C" so a console Ctrl-C (service
+	// stop, interactive) reaches the os.Interrupt handler below.
+	instance.ClearInheritedCtrlCIgnore()
+
 	// --version flag to print the version
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
 		fmt.Printf("llamactl version: %s\n", version)

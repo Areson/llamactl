@@ -219,7 +219,7 @@ These were found in review / first E2E. Not all are blockers for “B answers on
 
 - **`os.Exit(0)` from a goroutine is not blocked by `<-stop`.** That was a misdiagnosis. A now signals `hotSwapExit`; main returns without `Shutdown()`. Do not add `TerminateProcess` folklore. B used to try to kill A **after deleting** `handoff-state.json`, so `getHotSwapAPID()` was always 0 — that kill path was removed; don’t bring it back.
 - **Swap mutex is held until A exits** (`releaseOnReturn = false` on success). Start/stop/restart return `ErrHotSwapInProgress` → HTTP 503 + `Retry-After: 2`. Confirm UI toasts/retries if you care about dashboard clicks during swap.
-- **`DETACHED_PROCESS` on every model child** is required for survival; `GenerateConsoleCtrlEvent` is then theater. Non-adopted stop must remain stdin-EOF (Unix) or `TerminateProcess` / force-kill (Windows). Adopted stop is PID-based (`stop_process_windows.go`).
+- ~~**`DETACHED_PROCESS` on every model child** is required for survival; `GenerateConsoleCtrlEvent` is then theater.~~ **Superseded 2026-10-05:** children use `CREATE_NO_WINDOW` (own hidden console — survives A just as well) and Stop sends Ctrl-C to that console via the `__console-ctrl` helper before any hard kill; hot-swap B inherits A's console. See `windows-clean-shutdown.md`.
 
 ### Sockets / protocol
 
