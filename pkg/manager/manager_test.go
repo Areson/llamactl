@@ -47,8 +47,13 @@ func TestManager_PersistsAndLoadsInstances(t *testing.T) {
 		t.Fatalf("CreateInstance failed: %v", err)
 	}
 
-	// Shutdown first manager to close database connection
+	// Shutdown stops instances but does not close the database: the caller
+	// owns it (as in main). Close it so the second connection starts fresh
+	// and TempDir cleanup can delete test.db (Windows refuses while open).
 	manager1.Shutdown()
+	if err := db1.Close(); err != nil {
+		t.Fatalf("Failed to close first database: %v", err)
+	}
 
 	// Load instances from database
 	db2, err := database.Open(&database.Config{
@@ -76,6 +81,9 @@ func TestManager_PersistsAndLoadsInstances(t *testing.T) {
 	}
 
 	manager2.Shutdown()
+	if err := db2.Close(); err != nil {
+		t.Fatalf("Failed to close second database: %v", err)
+	}
 }
 
 func TestDeleteInstance_RemovesFromDatabase(t *testing.T) {
@@ -201,12 +209,16 @@ func createTestAppConfig(instancesDir string) *config.AppConfig {
 			},
 		},
 		Instances: config.InstancesConfig{
-			PortRange:            [2]int{8000, 9000},
-			MaxInstances:         10,
-			MaxRunningInstances:  10,
-			DefaultAutoRestart:   true,
-			DefaultMaxRestarts:   3,
-			LogsDir:              instancesDir,
+			PortRange:           [2]int{8000, 9000},
+			MaxInstances:        10,
+			MaxRunningInstances: 10,
+			DefaultAutoRestart:  true,
+			DefaultMaxRestarts:  3,
+			LogsDir:             instancesDir,
+			// Without this, runtime state (runtime.json) lands in a
+			// cwd-relative "<instance>/" dir inside the source tree: the
+			// config is built directly, so LoadConfig's default never runs.
+			InstancesDir:         instancesDir,
 			DefaultRestartDelay:  5,
 			DefaultIdleTimeout:   30,
 			TimeoutCheckInterval: 5,
