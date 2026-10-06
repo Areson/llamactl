@@ -188,7 +188,8 @@ wasted grace). Next start uses the new flags.
 | Live: service stop via Servy | ✅ 22:41: Servy Ctrl-C → supervisor `received the Ctrl-C` → llamactl stopped Tabby cleanly → `exited cleanly, leftover models killed=0`; no hard kills |
 | Service stop held 30 s by open SSE streams | ✅ fixed; deployed by hot-swap (`db6d45c`), service stop now ~2 s |
 | Live: Tabby cache persisted on Stop and restored on next load | ✅ 23:00 saved 88 pages / 5 checkpoints (1.2 GB, 1.7 s); 23:02 restored in 1.2 s, next request 62% cached |
-| Hot-swap quirks: stuck `in_progress` state, `.old` left behind | ✅ fixed (see above); needs deploy |
+| Hot-swap quirks: stuck `in_progress` state, `.old` left behind | ✅ verified live: `222b949`→`222b949` swap (23:31) ended `phase: complete`; B removed `.old` 1 s after A exited |
+| Live: idle-timeout stop of an adopted instance | ✅ 23:28 `qwen38-27b-exl3-tabby` (adopted after hot-swap) timed out → clean stop → cache persisted (80 pages, 7 checkpoints, 1.9 s) |
 | Interaction with `synchronous_group_eviction_timeout_sec` (30 s) when a victim uses most of a 30 s grace | ⬜ watch; sync wait already falls back to async on timeout |
 
 ## Live findings (2026-10-05)
