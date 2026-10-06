@@ -129,9 +129,17 @@ Evidence:
   owned paths). No hard kills.
 
 Seen during the E2E (pre-existing, not addressed): A's final rename of
-`handoff-state.json` can fail with "Access is denied" while something polls
-`/hot-swap/status`, leaving `phase` stuck at `in_progress` after a successful
-swap.
+`handoff-state.json` fails with "Access is denied", leaving `phase` stuck at
+`in_progress` after a successful swap. Live hot-swap to `db6d45c`
+(2026-10-05 22:50) reproduced it with **nothing polling** `/hot-swap/status`,
+so a status reader is not the cause; B reading the state file during its own
+startup (`pkg/manager/hotswap_b.go:38`) is the next suspect. Same swap: B's
+cleanup logged `A (PID 27212) still alive after 60s` although A had exited at
+22:50:12 (supervisor logged the exit; only B in the process list), so
+`llamactl.exe.old` was left for the next startup sweep. Likely the
+`PIDAlive` false positive — `OpenProcess` succeeds on an exited process while
+any handle to it is open (the supervisor holds one); `waitPIDExit` /
+the supervisor's new `IsAlive` use a wait-based check for this reason.
 
 Compatibility: instances started by an older binary (`DETACHED_PROCESS`, no
 console) make `AttachConsole` fail → stop logs it and hard-kills immediately (no
