@@ -187,6 +187,9 @@ func main() {
 		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler: r,
 	}
+	// Shutdown waits for active requests; end SSE streams so open UI tabs
+	// don't hold it (and every instance stop behind it) for the full deadline.
+	httpServer.RegisterOnShutdown(handler.CloseStreams)
 
 	// Bind the listener.
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

@@ -78,6 +78,26 @@ type Handler struct {
 	// runs outside this lock so unrelated starts don't serialize behind a
 	// model load.
 	startMu sync.Mutex
+
+	// streamsDone is closed by CloseStreams when the HTTP server shuts down,
+	// so long-lived streams (SSE) return instead of holding
+	// http.Server.Shutdown open until its deadline. Shutdown does not cancel
+	// active request contexts. Nil on a zero Handler: streams then end only
+	// when the client disconnects.
+	streamsDone      chan struct{}
+	closeStreamsOnce sync.Once
+}
+
+// CloseStreams ends all open long-lived streams (SSE). Register it with
+// http.Server.RegisterOnShutdown. Ordinary requests, including in-flight
+// inference, are unaffected and still drain normally. Safe to call more
+// than once.
+func (h *Handler) CloseStreams() {
+	h.closeStreamsOnce.Do(func() {
+		if h.streamsDone != nil {
+			close(h.streamsDone)
+		}
+	})
 }
 
 // NewHandler creates a new Handler instance with the provided instance manager and configuration
@@ -89,7 +109,8 @@ func NewHandler(im manager.InstanceManager, mm *models.Manager, cfg config.AppCo
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		authStore: authStore,
+		authStore:   authStore,
+		streamsDone: make(chan struct{}),
 	}
 	handler.authMiddleware = NewAPIAuthMiddleware(cfg.Auth, authStore)
 	return handler

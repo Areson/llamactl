@@ -52,7 +52,12 @@ func (h *Handler) InstanceEvents() http.HandlerFunc {
 		for {
 			select {
 			case <-ctx.Done():
-				// Client disconnected or server shutting down.
+				// Client disconnected.
+				return
+			case <-h.streamsDone:
+				// Server shutting down: end the stream so Shutdown is not
+				// held open. Clients reconnect to whichever llamactl serves
+				// next.
 				return
 			case ev, ok := <-sub.Ch:
 				if !ok {

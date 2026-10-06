@@ -110,8 +110,8 @@ Fix without any endpoint:
 |---|---|
 | B inherits A's console (no creation flags); `CREATE_NO_WINDOW` if A has none (avoids a visible new console window) | `pkg/hotswap/hotswap_a.go` (`bCreationFlags`) |
 | `ClearInheritedCtrlCIgnore()` at llamactl startup, so llamactl itself honours Ctrl-C however it was launched | `cmd/server/main.go` |
-| Supervisor: wait for the generation to exit on its own; hard-kill (by job/tree) only after its timeout | `start-llamactl.ps1` — **outside repo, drafted, not applied** |
-| Servy `StopTimeout` 5 s → ~90 s | Servy config — **not applied** |
+| Supervisor: wait for the generation to exit on its own; hard-kill (by job/tree) only after its timeout | `start-llamactl.ps1` — outside repo; **deployed 2026-10-05** |
+| Servy `StopTimeout` 5 s → ~90 s | Servy config — **set to 90 s 2026-10-05** |
 
 A console outlives any one attached process, so B survives A's exit exactly
 as it did detached. Models stay on their own consoles, so the service Ctrl-C
@@ -143,13 +143,43 @@ wasted grace). Next start uses the new flags.
 |---|---|
 | Technique proven, session 1 and session 0 | ✅ |
 | Implemented + unit tests | ✅ |
-| E2E: llamactl Stop on a real Tabby instance → `Persisted prompt cache` in Tabby log | ⬜ needs a free GPU / a llamactl run on a test port |
-| E2E: llama-server instance clean stop (log shows its shutdown path) | ⬜ |
 | E2E: hot-swap, then Stop an adopted instance (spawned by the new binary) | ✅ (via service-style Ctrl-C of B; fake backends) |
 | E2E: Ctrl-C reaches hot-swapped B; B stops all instances cleanly | ✅ |
-| Supervisor `start-llamactl.ps1` waits instead of killing | ⬜ drafted (`start-llamactl.ps1.proposed`), needs review |
-| Servy `StopTimeout` raised | ⬜ needs admin change |
+| Deployed `1c50766` to the live service (2026-10-05 22:28) | ✅ |
+| Live: llama-server Stop (`ne-e2b-summarizer`) | ✅ `clean stop requested` → `shut down gracefully` in 1 s; llama-server logged `cleaning up before exit...` |
+| Live: Tabby Stop (`qwen38-27b-exl3-tabby`) | ✅ Tabby `Shutdown signal called. Exiting gracefully.` → `Model unloaded.` — first time `unload()` ran under llamactl |
+| Supervisor `start-llamactl.ps1` waits instead of killing | ✅ deployed (from the `.proposed` draft) |
+| Servy `StopTimeout` raised (5 → 90 s) | ✅ |
+| Live: service stop via Servy | ✅ 22:41: Servy Ctrl-C → supervisor `received the Ctrl-C` → llamactl stopped Tabby cleanly → `exited cleanly, leftover models killed=0`; no hard kills |
+| Service stop held 30 s by open SSE streams | ✅ fixed (see below); needs redeploy |
+| Tabby `Persisted prompt cache` on Stop | ⬜ blocked by Tabby patch, not by stop path: persistence skips when vision is enabled (see below) |
 | Interaction with `synchronous_group_eviction_timeout_sec` (30 s) when a victim uses most of a 30 s grace | ⬜ watch; sync wait already falls back to async on timeout |
+
+## Live findings (2026-10-05)
+
+**SSE streams held every service stop for 30 s.** The 22:41 service stop took
+32 s: `TrackingListener: closing listener (11 tracked conns left open)`, then
+`Error shutting down server: context deadline exceeded` exactly 30 s later,
+and only then were instances stopped. `http.Server.Shutdown` waits for active
+requests and does not cancel their contexts; `/instances/events` (SSE) only
+returned on client disconnect, so any open web UI tab held shutdown to its
+deadline. Fix: `Handler.CloseStreams` (registered via
+`httpServer.RegisterOnShutdown`) ends SSE streams; ordinary requests,
+including in-flight inference, still drain. Tests:
+`pkg/server/handlers_sse_test.go` — the open-streams test fails on the old
+code with the same `context deadline exceeded`.
+
+**Tabby cache persistence vs vision.** With persistence configured, Tabby
+logged `Cache persistence is not supported with vision enabled; skipping.` on
+both load and unload. `qwen38-27b-exl3-tabby` has vision on, so no save. The
+stop path itself is fine. To see a save: test with vision off, or extend
+`cache_persist.py` (vision is excluded deliberately — image embeddings are not
+part of the persisted state).
+
+**Stop before the Servy timeout change (22:37).** With `StopTimeout` still 5 s,
+Servy logged `Graceful shutdown not supported or timed out. Forcing kill`
+for conhost and llamactl 5 s in. No model was running, so nothing was lost;
+this is why the timeout must exceed llamactl's drain + grace.
 
 ## Not pursued
 
