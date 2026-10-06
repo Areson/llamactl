@@ -3,27 +3,17 @@
 package manager
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
+	"llamactl/pkg/hotswap"
 )
 
-// readHandoffState is a local helper to avoid importing the hotswap
-// package directly in cleanup.go (which is also used by non-hotswap paths).
+// readHandoffState returns the phase and A's PID from handoff-state.json
+// (zero values if there is none). It goes through hotswap.ReadHandoffState
+// so the file is opened shareably: during a swap A may be replacing it at
+// the same moment B's startup sweep reads it.
 func readHandoffState(dataDir string) (phase string, aPID int, err error) {
-	data, err := os.ReadFile(dataDir + "\\handoff-state.json")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", 0, nil
-		}
+	state, err := hotswap.ReadHandoffState(dataDir)
+	if err != nil || state == nil {
 		return "", 0, err
 	}
-	var s struct {
-		Phase string `json:"phase"`
-		APID  int    `json:"a_pid"`
-	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return "", 0, fmt.Errorf("failed to parse handoff state: %w", err)
-	}
-	return s.Phase, s.APID, nil
+	return string(state.Phase), state.APID, nil
 }

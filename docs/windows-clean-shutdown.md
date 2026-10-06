@@ -128,18 +128,32 @@ Evidence:
   `clean stop requested` and `shut down gracefully` for both (adopted and
   owned paths). No hard kills.
 
-Seen during the E2E (pre-existing, not addressed): A's final rename of
-`handoff-state.json` fails with "Access is denied", leaving `phase` stuck at
-`in_progress` after a successful swap. Live hot-swap to `db6d45c`
-(2026-10-05 22:50) reproduced it with **nothing polling** `/hot-swap/status`,
-so a status reader is not the cause; B reading the state file during its own
-startup (`pkg/manager/hotswap_b.go:38`) is the next suspect. Same swap: B's
-cleanup logged `A (PID 27212) still alive after 60s` although A had exited at
-22:50:12 (supervisor logged the exit; only B in the process list), so
-`llamactl.exe.old` was left for the next startup sweep. Likely the
-`PIDAlive` false positive — `OpenProcess` succeeds on an exited process while
-any handle to it is open (the supervisor holds one); `waitPIDExit` /
-the supervisor's new `IsAlive` use a wait-based check for this reason.
+Hot-swap quirks seen during this work — **fixed** (2026-10-05):
+
+1. **`handoff-state.json` stuck at `in_progress`.** A's final state write
+   failed with "Access is denied" on every live swap, even with nothing
+   polling `/hot-swap/status`. Cause: `handoffMu` only serializes within one
+   process, but A and B both read/write the file; Go's `os.ReadFile` opens
+   without `FILE_SHARE_DELETE`, and plain `os.Rename` (`MoveFileEx`) cannot
+   replace a file that is open even *with* `FILE_SHARE_DELETE` (probed).
+   Fix (`pkg/hotswap/handoff_state*.go`): readers open with
+   `FILE_SHARE_DELETE`; the writer replaces via POSIX-semantics rename
+   (`SetFileInformationByHandle`/`FileRenameInfoEx`, which succeeds over such
+   readers), falling back to `os.Rename` where unsupported, and retries
+   access-denied/sharing-violation contention for up to 2 s (older binaries,
+   antivirus). The manager's duplicate reader (`cleanup_helper.go`) now uses
+   the shared one.
+2. **`A still alive after 60s`; `llamactl.exe.old` left behind.**
+   `PIDAlive` only checked that `OpenProcess` succeeded, which stays true for
+   an exited process while any handle to it is open (the supervisor holds
+   one). Fix (`pid_alive_windows.go`): alive = the process handle is not yet
+   signalled (exit-code fallback without `SYNCHRONIZE` access). Also corrects
+   adoption's stale-PID check and the startup sweep.
+
+Tests reproduce both with the live error messages before the fix
+(`handoff_state_windows_test.go`, `pid_alive_windows_test.go`). Real-binary
+hot-swap E2E after the fix: phase `complete`, no rename failure, and B
+logged `Cleanup: removed old binary` ~1 s after A exited.
 
 Compatibility: instances started by an older binary (`DETACHED_PROCESS`, no
 console) make `AttachConsole` fail → stop logs it and hard-kills immediately (no
@@ -159,8 +173,9 @@ wasted grace). Next start uses the new flags.
 | Supervisor `start-llamactl.ps1` waits instead of killing | ✅ deployed (from the `.proposed` draft) |
 | Servy `StopTimeout` raised (5 → 90 s) | ✅ |
 | Live: service stop via Servy | ✅ 22:41: Servy Ctrl-C → supervisor `received the Ctrl-C` → llamactl stopped Tabby cleanly → `exited cleanly, leftover models killed=0`; no hard kills |
-| Service stop held 30 s by open SSE streams | ✅ fixed (see below); needs redeploy |
-| Tabby `Persisted prompt cache` on Stop | ⬜ blocked by Tabby patch, not by stop path: persistence skips when vision is enabled (see below) |
+| Service stop held 30 s by open SSE streams | ✅ fixed; deployed by hot-swap (`db6d45c`), service stop now ~2 s |
+| Live: Tabby cache persisted on Stop and restored on next load | ✅ 23:00 saved 88 pages / 5 checkpoints (1.2 GB, 1.7 s); 23:02 restored in 1.2 s, next request 62% cached |
+| Hot-swap quirks: stuck `in_progress` state, `.old` left behind | ✅ fixed (see above); needs deploy |
 | Interaction with `synchronous_group_eviction_timeout_sec` (30 s) when a victim uses most of a 30 s grace | ⬜ watch; sync wait already falls back to async on timeout |
 
 ## Live findings (2026-10-05)

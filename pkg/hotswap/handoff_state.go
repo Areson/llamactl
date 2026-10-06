@@ -78,13 +78,28 @@ func WriteHandoffState(dataDir string, state *HandoffState) error {
 		return fmt.Errorf("failed to write temp handoff state: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, HandoffStatePath(dataDir)); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename handoff state: %w", err)
+	// handoffMu only serializes this process; A and B are separate
+	// processes. replaceFile succeeds over readers that open the file
+	// shareably (readHandoffStateFile), but another reader (an older binary
+	// mid-swap, antivirus) can still block the replace for a moment, so
+	// retry that contention briefly.
+	deadline := time.Now().Add(renameRetryBudget)
+	for {
+		err = replaceFile(tmpPath, HandoffStatePath(dataDir))
+		if err == nil {
+			return nil
+		}
+		if !isRenameContention(err) || time.Now().After(deadline) {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to rename handoff state: %w", err)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-
-	return nil
 }
+
+// renameRetryBudget bounds how long WriteHandoffState retries a rename that
+// is blocked by another handle on the target.
+const renameRetryBudget = 2 * time.Second
 
 // ReadHandoffState reads the handoff state from disk.
 // Returns nil (no error) if the file does not exist.
@@ -92,11 +107,20 @@ func ReadHandoffState(dataDir string) (*HandoffState, error) {
 	handoffMu.Lock()
 	defer handoffMu.Unlock()
 
-	path := HandoffStatePath(dataDir)
-	data, err := os.ReadFile(path)
+	state, err := readHandoffStateFile(HandoffStatePath(dataDir))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return state, err
+}
+
+// readHandoffStateFile reads and parses the state file without taking
+// handoffMu. A missing file returns an error satisfying os.IsNotExist.
+func readHandoffStateFile(path string) (*HandoffState, error) {
+	data, err := readFileShared(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, err
 		}
 		return nil, fmt.Errorf("failed to read handoff state: %w", err)
 	}
