@@ -3,6 +3,7 @@
 package instance
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
 )
@@ -15,9 +16,9 @@ func setProcAttrs(cmd *exec.Cmd) {
 }
 
 // signalStop delivers SIGINT (os.Interrupt) to the child.
-func signalStop(cmd *exec.Cmd) {
+func signalStop(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return fmt.Errorf("no process")
 	}
-	_ = cmd.Process.Signal(syscall.SIGINT)
+	return cmd.Process.Signal(syscall.SIGINT)
 }

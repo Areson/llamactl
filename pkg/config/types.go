@@ -111,6 +111,10 @@ type InstancesConfig struct {
 	// Timeout in seconds for synchronous group eviction before async fallback.
 	SynchronousGroupEvictionTimeoutSec int `yaml:"synchronous_group_eviction_timeout_sec" json:"synchronous_group_eviction_timeout_sec"`
 
+	// Seconds to wait for an instance to exit after the clean-stop request
+	// (SIGINT on Unix, console Ctrl-C on Windows) before it is hard-killed.
+	GracefulStopTimeoutSec int `yaml:"graceful_stop_timeout_sec" json:"graceful_stop_timeout_sec"`
+
 	// Default idle timeout for instances in minutes (0 means no timeout)
 	DefaultIdleTimeout int `yaml:"default_idle_timeout" json:"default_idle_timeout"`
 

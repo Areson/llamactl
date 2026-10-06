@@ -67,6 +67,9 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.Instances.DefaultRestartDelay != 5 {
 		t.Errorf("Expected default restart delay 5, got %d", cfg.Instances.DefaultRestartDelay)
 	}
+	if cfg.Instances.GracefulStopTimeoutSec != 30 {
+		t.Errorf("Expected default graceful stop timeout 30, got %d", cfg.Instances.GracefulStopTimeoutSec)
+	}
 	if cfg.Backends.Tabby.Command != "python" {
 		t.Errorf("Expected default Tabby command 'python', got %q", cfg.Backends.Tabby.Command)
 	}
@@ -141,15 +144,16 @@ instances:
 func TestLoadConfig_EnvironmentOverrides(t *testing.T) {
 	// Set environment variables
 	envVars := map[string]string{
-		"LLAMACTL_HOST":                  "0.0.0.0",
-		"LLAMACTL_PORT":                  "3000",
-		"LLAMACTL_INSTANCE_PORT_RANGE":   "5000-6000",
-		"LLAMACTL_LOGS_DIR":              "/env/logs",
-		"LLAMACTL_MAX_INSTANCES":         "20",
-		"LLAMACTL_DEFAULT_IDLE_TIMEOUT":  "60",
-		"LLAMACTL_DEFAULT_AUTO_RESTART":  "false",
-		"LLAMACTL_DEFAULT_MAX_RESTARTS":  "7",
-		"LLAMACTL_DEFAULT_RESTART_DELAY": "15",
+		"LLAMACTL_HOST":                      "0.0.0.0",
+		"LLAMACTL_PORT":                      "3000",
+		"LLAMACTL_INSTANCE_PORT_RANGE":       "5000-6000",
+		"LLAMACTL_LOGS_DIR":                  "/env/logs",
+		"LLAMACTL_MAX_INSTANCES":             "20",
+		"LLAMACTL_DEFAULT_IDLE_TIMEOUT":      "60",
+		"LLAMACTL_DEFAULT_AUTO_RESTART":      "false",
+		"LLAMACTL_DEFAULT_MAX_RESTARTS":      "7",
+		"LLAMACTL_DEFAULT_RESTART_DELAY":     "15",
+		"LLAMACTL_GRACEFUL_STOP_TIMEOUT_SEC": "45",
 	}
 
 	// Set env vars and ensure cleanup
@@ -193,6 +197,9 @@ func TestLoadConfig_EnvironmentOverrides(t *testing.T) {
 	}
 	if cfg.Instances.DefaultRestartDelay != 15 {
 		t.Errorf("Expected restart delay 15, got %d", cfg.Instances.DefaultRestartDelay)
+	}
+	if cfg.Instances.GracefulStopTimeoutSec != 45 {
+		t.Errorf("Expected graceful stop timeout 45, got %d", cfg.Instances.GracefulStopTimeoutSec)
 	}
 }
 

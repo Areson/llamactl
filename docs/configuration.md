@@ -257,6 +257,7 @@ instances:
   default_on_demand_start: true    # Default on-demand start setting
   on_demand_start_timeout: 120     # Default on-demand start timeout in seconds
   timeout_check_interval: 5        # Default instance timeout check interval in minutes
+  graceful_stop_timeout_sec: 30    # Seconds to wait for a clean exit before hard-killing
   group_limits: {}                 # Per-group running instance limits (e.g., {large: 1, small: 3})
   log_rotation_enabled: true    # Enable log rotation (default: true)
   log_rotation_max_size: 100    # Max log file size in MB before rotation (default: 100)
@@ -278,6 +279,7 @@ instances:
 - `LLAMACTL_DEFAULT_ON_DEMAND_START` - Default on-demand start setting (true/false)  
 - `LLAMACTL_ON_DEMAND_START_TIMEOUT` - Default on-demand start timeout in seconds
 - `LLAMACTL_TIMEOUT_CHECK_INTERVAL` - Default instance timeout check interval in minutes
+- `LLAMACTL_GRACEFUL_STOP_TIMEOUT_SEC` - Seconds to wait for a clean exit before hard-killing (default 30)
 - `LLAMACTL_GROUP_LIMITS` - Per-group running instance limits (format: "group1=2,group2=1")
 - `LLAMACTL_LOG_ROTATION_ENABLED` - Enable log rotation (true/false)
 - `LLAMACTL_LOG_ROTATION_MAX_SIZE` - Max log file size in MB

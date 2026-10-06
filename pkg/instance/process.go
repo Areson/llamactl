@@ -262,30 +262,28 @@ func (p *process) stop() error {
 	// Now set status to stopped to signal intentional stop
 	p.instance.SetStatus(Stopped)
 
-	// Graceful stop: close stdin (EOF is a shutdown request where the
-	// backend honors it), then the platform interrupt (SIGINT on Unix).
-	// On Windows SIGINT/Ctrl-C do not reach the child, so the force-kill
-	// below is the reliable stop; the shorter grace there trims the wait.
-	if stdin != nil {
-		if cerr := stdin.Close(); cerr != nil {
-			log.Printf("Failed to close stdin for instance %s: %v", p.instance.Name, cerr)
-		}
-	}
-	signalStop(cmd)
-
 	// If no process exists, we can return immediately
 	if cmd == nil || monitorDone == nil {
 		p.instance.logger.close()
 		return nil
 	}
 
-	// Wait for the process to exit after the shutdown signal. On Unix a
-	// SIGINT graceful stop usually finishes in a second or two and the long
-	// grace is the safety net. On Windows the stop is the force-kill, so use
-	// a shorter grace there to avoid a slow shutdown.
-	killGrace := 30 * time.Second
-	if runtime.GOOS == "windows" {
-		killGrace = 5 * time.Second
+	// Clean stop first: close stdin (EOF is a shutdown request where the
+	// backend honors it), then the platform interrupt — SIGINT on Unix,
+	// Ctrl-C on the child's own console on Windows. Only after the grace
+	// period expires is the process (tree) hard-killed. If the request
+	// could not be delivered at all, skip straight to the hard kill.
+	if stdin != nil {
+		if cerr := stdin.Close(); cerr != nil {
+			log.Printf("Failed to close stdin for instance %s: %v", p.instance.Name, cerr)
+		}
+	}
+	killGrace := p.gracefulStopTimeout()
+	if serr := signalStop(cmd); serr != nil {
+		log.Printf("Instance %s: clean stop request failed (%v); hard-killing", p.instance.Name, serr)
+		killGrace = 0
+	} else {
+		log.Printf("Instance %s: clean stop requested; waiting up to %v before hard kill", p.instance.Name, killGrace)
 	}
 
 	select {
@@ -605,11 +603,14 @@ func portInUse(host string, port int) bool {
 // generation. The process was started by a different llamactl, so we don't
 // have the pipe handles. Instead we:
 //  1. Read the PID from runtime.json
-//  2. On Windows: prefer TerminateJobObject via the named Job Object (kill-tree);
-//     fall back to assigning descendants into a new job or TerminateProcess on
-//     each descendant. On Unix: SIGTERM the root PID.
-//  3. Wait for the port to release (up to 30s)
-//  4. Clear the adopted flag so a later start/stop uses the owned-process path.
+//  2. Request a clean stop (console Ctrl-C on Windows, SIGINT on Unix) and
+//     wait up to the graceful stop timeout for the PID to exit.
+//  3. If it is still running: on Windows prefer TerminateJobObject via the
+//     named Job Object (kill-tree); fall back to assigning descendants into a
+//     new job or TerminateProcess on each descendant. On Unix: SIGTERM the
+//     root PID.
+//  4. Wait for the port to release (up to 30s)
+//  5. Clear the adopted flag so a later start/stop uses the owned-process path.
 func (p *process) stopAdopted() error {
 	host, port := p.instance.options.GetHost(), p.instance.options.GetPort()
 	if host == "" {
@@ -633,17 +634,33 @@ func (p *process) stopAdopted() error {
 
 	log.Printf("Instance %s (adopted): stopping PID %d, port %d", p.instance.Name, state.PID, state.Port)
 
-	method, kerr := stopAdoptedProcessTree(p.instance.Name, state.PID)
-	if kerr != nil {
-		log.Printf("Instance %s (adopted): stop tree failed (%s): %v", p.instance.Name, method, kerr)
+	// Clean stop first; hard-kill the tree only if it is refused or the
+	// process outlives the grace period. Instances spawned by an older
+	// binary (DETACHED_PROCESS, no console) cannot receive the request.
+	exited := false
+	if gerr := gracefulStopPID(state.PID); gerr != nil {
+		log.Printf("Instance %s (adopted): clean stop request failed (%v); hard-killing", p.instance.Name, gerr)
 	} else {
-		switch method {
-		case "job", "job-assign":
-			log.Printf("Instance %s (adopted): job tree terminated (%s)", p.instance.Name, method)
-		case "tree-kill":
-			log.Printf("Instance %s (adopted): adopted fallback tree-kill completed", p.instance.Name)
-		default:
-			log.Printf("Instance %s (adopted): stopped via %s", p.instance.Name, method)
+		grace := p.gracefulStopTimeout()
+		log.Printf("Instance %s (adopted): clean stop requested; waiting up to %v before hard kill", p.instance.Name, grace)
+		if exited = waitPIDExit(state.PID, grace); exited {
+			log.Printf("Instance %s (adopted): shut down gracefully", p.instance.Name)
+		}
+	}
+
+	if !exited {
+		method, kerr := stopAdoptedProcessTree(p.instance.Name, state.PID)
+		if kerr != nil {
+			log.Printf("Instance %s (adopted): stop tree failed (%s): %v", p.instance.Name, method, kerr)
+		} else {
+			switch method {
+			case "job", "job-assign":
+				log.Printf("Instance %s (adopted): job tree terminated (%s)", p.instance.Name, method)
+			case "tree-kill":
+				log.Printf("Instance %s (adopted): adopted fallback tree-kill completed", p.instance.Name)
+			default:
+				log.Printf("Instance %s (adopted): stopped via %s", p.instance.Name, method)
+			}
 		}
 	}
 
@@ -666,6 +683,19 @@ func (p *process) stopAdopted() error {
 	p.instance.SetStatus(Stopped)
 	log.Printf("Instance %s (adopted): stopped", p.instance.Name)
 	return nil
+}
+
+// defaultGracefulStopTimeout applies when instances.graceful_stop_timeout_sec
+// is unset or not positive.
+const defaultGracefulStopTimeout = 30 * time.Second
+
+// gracefulStopTimeout is how long stop waits after the clean-stop request
+// before hard-killing the process tree.
+func (p *process) gracefulStopTimeout() time.Duration {
+	if s := p.instance.globalInstanceSettings; s != nil && s.GracefulStopTimeoutSec > 0 {
+		return time.Duration(s.GracefulStopTimeoutSec) * time.Second
+	}
+	return defaultGracefulStopTimeout
 }
 
 func (p *process) closeChildLog() {

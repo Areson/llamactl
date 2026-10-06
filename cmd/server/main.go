@@ -6,6 +6,7 @@ import (
 	"io"
 	"llamactl/pkg/config"
 	"llamactl/pkg/database"
+	"llamactl/pkg/instance"
 	"llamactl/pkg/manager"
 	"llamactl/pkg/models"
 	"llamactl/pkg/server"
@@ -76,6 +77,12 @@ func (t *teeWriter) Write(p []byte) (int, error) {
 }
 
 func main() {
+
+	// Windows clean-stop helper: `llamactl __console-ctrl <pid>` raises Ctrl-C
+	// on an instance's console and exits. Must run before any server setup.
+	if handled, code := instance.RunConsoleCtrlHelper(os.Args); handled {
+		os.Exit(code)
+	}
 
 	// --version flag to print the version
 	if len(os.Args) > 1 && os.Args[1] == "--version" {

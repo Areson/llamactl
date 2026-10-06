@@ -79,6 +79,11 @@ func loadEnvVars(cfg *AppConfig) {
 			cfg.Instances.SynchronousGroupEvictionTimeoutSec = n
 		}
 	}
+	if gracefulStopTimeout := os.Getenv("LLAMACTL_GRACEFUL_STOP_TIMEOUT_SEC"); gracefulStopTimeout != "" {
+		if n, err := strconv.Atoi(gracefulStopTimeout); err == nil {
+			cfg.Instances.GracefulStopTimeoutSec = n
+		}
+	}
 	// Backend config
 	// LlamaCpp backend
 	if llamaCmd := os.Getenv("LLAMACTL_LLAMACPP_COMMAND"); llamaCmd != "" {

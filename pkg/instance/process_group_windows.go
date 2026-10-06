@@ -3,34 +3,35 @@
 package instance
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
-// Windows process creation flags for detached, swappable child processes.
-const (
-	// DETACHED_PROCESS: the child has no console. Survives the parent's death.
-	DETACHED_PROCESS = 0x00000008
-	// CREATE_NEW_PROCESS_GROUP: the child gets its own process group.
-	// Allows it to be managed independently (not killed when the parent's
-	// console session ends).
-	CREATE_NEW_PROCESS_GROUP = 0x00000200
-)
-
+// setProcAttrs gives the child its own hidden console (CREATE_NO_WINDOW).
+//
+//   - Its own console, not llamactl's: the child survives llamactl exiting
+//     (hot-swap) and a Ctrl-C on llamactl's console never reaches it.
+//   - A console at all: signalStop can attach to it and raise CTRL_C_EVENT for
+//     a clean shutdown. DETACHED_PROCESS children have none and can only be
+//     hard-killed.
+//   - No CREATE_NEW_PROCESS_GROUP: it sets the inherited "ignore Ctrl-C" flag,
+//     which would make the child (and everything it spawns) ignore the event.
 func setProcAttrs(cmd *exec.Cmd) {
+	clearInheritedCtrlCIgnore()
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	// DETACHED_PROCESS: child has no console, survives parent's death.
-	// CREATE_NEW_PROCESS_GROUP: child is in its own process group,
-	// not tied to the parent's console lifecycle.
-	cmd.SysProcAttr.CreationFlags |= DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 }
 
-// signalStop on Windows. SIGINT does not reach child processes, and
-// GenerateConsoleCtrlEvent is unreliable in a service session.
-// The primary stop mechanism is stdin close (EOF) handled by the backend;
-// this is a best-effort fallback.
-func signalStop(cmd *exec.Cmd) {
-	// No-op on Windows — see setProcAttrs.
+// signalStop requests a clean shutdown: Ctrl-C on the child's console, which
+// Python (SIGINT), Go (os.Interrupt), Node and llama-server all handle.
+func signalStop(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return fmt.Errorf("no process")
+	}
+	return sendConsoleCtrlC(cmd.Process.Pid)
 }

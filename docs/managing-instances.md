@@ -170,6 +170,30 @@ curl -X POST http://localhost:8080/api/v1/instances/{name}/stop \
   -H "Authorization: Bearer <token>"
 ```
 
+### How a Stop Works
+
+1. New requests are rejected and in-flight requests get up to 30 seconds to finish.
+2. llamactl asks the backend to shut down cleanly: `SIGINT` on Linux/macOS, and
+   **Ctrl-C on the instance's own hidden console** on Windows. Backends that handle
+   Ctrl-C (llama-server, TabbyAPI/uvicorn, Python, Go and Node programs) exit
+   normally and run their shutdown work, such as TabbyAPI unloading its model.
+3. If the process is still running after `graceful_stop_timeout_sec`, llamactl
+   hard-kills it (on Windows, the whole process tree via its Job Object).
+
+The same applies to idle-timeout and eviction stops, and to instances adopted
+after a hot-swap. Instances started by a llamactl build from before this
+behaviour have no console on Windows, so they are hard-killed immediately.
+
+```yaml
+instances:
+  # Seconds to wait for a clean exit before hard-killing. Default 30.
+  graceful_stop_timeout_sec: 30
+```
+
+| Option | Default | Env var | Effect |
+|--------|---------|---------|--------|
+| `graceful_stop_timeout_sec` | `30` | `LLAMACTL_GRACEFUL_STOP_TIMEOUT_SEC` | Grace period between the clean-stop request and the hard kill. |
+
 ## Edit Instance
 
 **Via Web UI**

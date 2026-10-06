@@ -79,6 +79,7 @@ func getDefaultConfig(dataDir string) AppConfig {
 			EvictOnManualStart:                 false,
 			SynchronousGroupEviction:           false,
 			SynchronousGroupEvictionTimeoutSec: 30,
+			GracefulStopTimeoutSec:             30,
 			DefaultIdleTimeout:                 30, // Default idle timeout of 30 minutes
 			DefaultAutoRestart:                 true,
 			DefaultMaxRestarts:                 3,
